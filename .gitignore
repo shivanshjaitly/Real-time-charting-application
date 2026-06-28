@@ -4,6 +4,7 @@
 /.vscode
 /website
 /dist
+/debug-dist
 /docs/.vitepress/cache
 /docs/node_modules
 

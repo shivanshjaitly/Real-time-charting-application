@@ -17,7 +17,15 @@ import { dispose, init } from '../src/index.ts'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const WS_URL       = 'ws://localhost:8000/ws'
+function resolveWsUrl () {
+  const backend = import.meta.env.VITE_WS_URL
+  if (backend) {
+    return backend.replace(/^http/i, 'ws').replace(/\/$/, '') + '/ws'
+  }
+  return 'ws://localhost:8000/ws'
+}
+
+const WS_URL = resolveWsUrl()
 const WORKSPACE_KEY = 'chartpro:workspace'
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AAPL', 'MSFT', 'TSLA', 'GOOGL', 'AMZN', 'NVDA']

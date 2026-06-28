@@ -1,0 +1,26 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploy: Render Dashboard → New → Blueprint → connect this repo (main branch).
+
+services:
+  # FastAPI backend + WebSocket server
+  - type: web
+    name: charting-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+
+  # Vite-built static frontend (debug/ app)
+  - type: web
+    name: charting-frontend
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && node_modules/.pnpm/node_modules/.bin/vite build --config vite.config.js
+    staticPublishPath: debug-dist
+    envVars:
+      - key: VITE_WS_URL
+        fromService:
+          type: web
+          name: charting-backend
+          envVarKey: RENDER_EXTERNAL_URL
