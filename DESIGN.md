@@ -29,29 +29,28 @@ The application is built inside the KlineCharts open-source library codebase. Th
 │  │  ConnectionManager (ws_server.py)                          │   │
 │  │  client_id → { topic → asyncio.Queue }                     │   │
 │  └──────────────────────┬─────────────────────────────────────┘   │
-│                          │ publish()                               │
+│                          │ read from subscriber queues            │
 │  ┌───────────────────────┴────────────────────────────────────┐   │
-│  │  PubSub                                                    │   │
-│  │  topic ("BTCUSDT:1m") → set[asyncio.Queue]                 │   │
+│  │  PubSub — topic ("BTCUSDT:1m") → set[asyncio.Queue]        │   │
+│  └───────────────────────┬─────────────────────────────────────┘   │
+│                          │ publish on every candle update         │
+│  ┌───────────────────────┴────────────────────────────────────┐   │
+│  │  MockDataGenerator (1m ticks only)                         │   │
 │  └───────────────────────┬────────────────────────────────────┘   │
-│                          │                                         │
+│                          │ 1m candle per symbol                   │
 │  ┌───────────────────────┴────────────────────────────────────┐   │
-│  │  AggregationEngine                                         │   │
-│  │  1m candle → derives 5m / 15m / 1h / 1d                   │   │
+│  │  AggregationEngine → derives 5m / 15m / 1h / 1d           │   │
 │  └───────────────────────┬────────────────────────────────────┘   │
-│                          │                                         │
+│                          │ append                                  │
 │  ┌───────────────────────┴────────────────────────────────────┐   │
-│  │  MockDataGenerator                                         │   │
-│  │  Emits 1m candle every 1 real second (time compression)    │   │
-│  └────────────────────────────────────────────────────────────┘   │
-│                                                                    │
-│  ┌────────────────────────────────────────────────────────────┐   │
-│  │  CandleStore                                               │   │
-│  │  In-memory deque(maxlen=200) per topic                     │   │
-│  │  Serves historical data on subscribe                       │   │
+│  │  CandleStore (deque maxlen=200 per topic)                  │   │
 │  └────────────────────────────────────────────────────────────┘   │
 └───────────────────────────────────────────────────────────────────┘
 ```
+
+### Frontend (debug/)
+
+Each **ChartPanel** owns a KlineCharts instance wired via `setDataLoader()` — `getBars` for history, `subscribeBar` for live candles. A single **WSManager** multiplexes all panel subscriptions over one WebSocket. Layout modes (1×1 through 4×4), symbol/interval selectors, and workspace save/restore (localStorage) are handled in `debug/main.js` without adding external frontend dependencies.
 
 ### Data Flow (per 1m tick)
 
@@ -93,13 +92,23 @@ Go and Node.js are both strong candidates for a high-concurrency WebSocket serve
 
 ### How it handles 1,000 concurrent connections
 
-The backend uses Python asyncio with FastAPI's native WebSocket support. Each WebSocket connection is a coroutine — not a thread — so memory overhead per connection is ~2KB (one asyncio.Queue + task per subscription). A single uvicorn worker process comfortably handles 1,000+ concurrent connections on the asyncio event loop.
+The backend uses Python asyncio with FastAPI's native WebSocket support. Each WebSocket connection is a coroutine — not a thread — so memory overhead per connection is ~2KB (one asyncio.Queue + listener task per subscription). A single uvicorn worker process comfortably handles 1,000+ concurrent connections on the asyncio event loop.
 
-**Verified:** k6 load test ran 1,000 simultaneous VUs:
-- **Zero connection errors** (0 of 14,731 sessions)
-- **100% subscribe success rate**
-- **88,386 WebSocket messages delivered**
-- **117 MB data at ~1 MB/s**
+**Load test:** k6 script at `backend/load-test/script.js` ramps to 1,000 VUs over 30s, holds 60s, ramps down. Each VU connects, subscribes to a random symbol (10 available) and interval (1m–1d), receives history + 5 live candles, then disconnects. Evidence: `backend/load-test/results.txt` and `backend/load-test/screenshot.png`.
+
+**Verified results (1,000 max VUs):**
+
+| Metric | Result | Threshold |
+|---|---|---|
+| WebSocket sessions | **14,683** | — |
+| Connection errors | **0** | count < 10 ✓ |
+| Subscribe success rate | **100%** (14,683 / 14,683) | rate > 99% ✓ |
+| Message latency p(95) | **1.05 s** | p(95) < 1.5 s ✓ |
+| WS messages delivered | **88,098** | — |
+| k6 checks passed | **100%** (44,049 / 44,049) | — |
+| Data throughput | **162 MB at ~1.4 MB/s** | — |
+
+**Latency threshold note:** The mock generator emits exactly 1 candle per real second (1 simulated minute). The minimum observable message interval is therefore ~1 s. The k6 threshold is set to 1,500 ms — not sub-second — so the test measures server overhead rather than generator tick rate. Server-side processing is <50 ms; the ~1 s median latency is dominated by the generator interval.
 
 ### Where it breaks next
 
@@ -143,7 +152,7 @@ Long-polling cannot sustain 1,000 concurrent real-time streams efficiently. Each
 
 | Decision | Assumption | Reasoning |
 |---|---|---|
-| **1 real second = 1 simulated minute** | Time compression for demo | A real trading platform generates 1 candle per minute. For a 3-day assignment demo, accelerated time is required to observe live updates. Documented here to be explicit. |
+| **1 real second = 1 simulated minute** | Time compression for demo | A real trading platform generates 1 candle per minute. For a 3-day assignment demo, accelerated time is required to observe live updates. Also drives the k6 p(95) latency threshold (1,500 ms): sub-second thresholds would always fail regardless of server performance. |
 | **In-memory candle store** | No persistence across restarts | The assignment asks for real-time streaming, not historical persistence. Adding a database would add complexity without demonstrating the core system. |
 | **Single WebSocket connection per browser tab** | All panels share one WS | Multiplexing all symbol:interval subscriptions over one connection is more efficient than one WS per panel. Standard practice in trading platforms. |
 | **10 mock symbols (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, AAPL, MSFT, TSLA, GOOGL, AMZN, NVDA)** | Symbols not specified in brief | The brief references "selected symbols" without specifying which. 10 symbols covering major crypto and equity demonstrates the multi-symbol workspace feature at a realistic scale. |

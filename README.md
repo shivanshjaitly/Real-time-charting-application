@@ -15,7 +15,7 @@ cd Real-time-charting-application
 pnpm install
 
 # 3. Install backend dependencies
-cd backend && pip3 install -r requirements.txt && cd ..
+cd backend && python3 -m pip install --user --break-system-packages -r requirements.txt && cd ..
 
 # 4. Terminal 1 — start backend
 cd backend && python3 server.py
@@ -47,6 +47,10 @@ Open **http://localhost:5173** in your browser. The backend must be running firs
 - **Python** ≥ 3.12
 - **k6** (for load testing): `brew install k6`
 
+> **Python 3.14 (Homebrew):** Homebrew marks the system Python as externally managed. Use:
+> `python3 -m pip install --user --break-system-packages -r requirements.txt`
+> instead of plain `pip3 install`. On Python 3.11/3.12, `pip3 install -r requirements.txt` also works.
+
 ---
 
 ## Frontend Setup
@@ -69,7 +73,7 @@ Opens at **http://localhost:5173**
 
 ```bash
 cd backend
-pip3 install -r requirements.txt
+python3 -m pip install --user --break-system-packages -r requirements.txt
 python3 server.py
 ```
 
@@ -113,13 +117,13 @@ Results: `backend/load-test/results.txt` | Screenshot: `backend/load-test/screen
 
 | Metric | Result |
 |---|---|
-| WS sessions | **14,742** |
+| WS sessions | **14,683** |
 | Connection errors | **0** (threshold: count < 10) ✓ |
 | Subscribe success rate | **100%** (threshold: rate > 99%) ✓ |
-| Message latency p(95) | **1.01 s** (threshold: p(95) < 1.5 s) ✓ |
-| WS messages delivered | **88,452** |
-| Data throughput | **252 MB at ~2.2 MB/s** |
-| k6 checks passed | **100%** (44,226 / 44,226) |
+| Message latency p(95) | **1.05 s** (threshold: p(95) < 1.5 s) ✓ |
+| WS messages delivered | **88,098** |
+| Data throughput | **162 MB at ~1.4 MB/s** |
+| k6 checks passed | **100%** (44,049 / 44,049) |
 
 > **Latency threshold note:** The p(95) threshold is set to 1,500 ms rather than a sub-second value. This is intentional and documented in [DESIGN.md](./DESIGN.md) §Trade-offs: the mock data generator emits exactly 1 candle per second (1 real second = 1 simulated minute), so the minimum observable message interval is ~1 s. A threshold below 1 s would always fail regardless of server performance. All server overhead is <50 ms; the 1 s median latency is purely the generator tick rate.
 

@@ -6,7 +6,7 @@
  * Run:
  *   k6 run load-test/script.js
  *
- * Expected: p95 message latency < 500ms at 1000 concurrent users.
+ * Expected: p95 message latency < 1500ms at 1000 concurrent users (see DESIGN.md §Trade-offs).
  */
 
 import { check, sleep } from 'k6'
@@ -40,7 +40,7 @@ export const options = {
 
 // ─── Test Function ────────────────────────────────────────────────────────────
 export default function () {
-  const symbols   = ['BTCUSDT', 'ETHUSDT', 'AAPL']
+  const symbols   = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AAPL', 'MSFT', 'TSLA', 'GOOGL', 'AMZN', 'NVDA']
   const intervals = ['1m', '5m', '15m', '1h', '1d']
 
   const symbol   = symbols[Math.floor(Math.random() * symbols.length)]
