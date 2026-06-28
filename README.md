@@ -4,6 +4,20 @@ Live candlestick charting built on top of the [KlineCharts](https://github.com/k
 
 ---
 
+## Live Demo
+
+**App:** https://charting-frontend.onrender.com/
+
+**Backend health:** https://charting-backend-c4f3.onrender.com/health
+
+The app is deployed on [Render](https://render.com) — a static frontend and a paid Python backend (always on). Open the frontend link in your browser; charts update live over WebSocket once connected.
+
+> **Load time:** The backend stays warm (paid tier). The frontend static site may take **10–15 seconds** on the first load; refresh if the page looks blank initially.
+
+**Design write-up:** [DESIGN.md](./DESIGN.md)
+
+---
+
 ## Quick Start (Clone Fresh)
 
 ```bash
