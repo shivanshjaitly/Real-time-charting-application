@@ -1,0 +1,271 @@
+/* Trading Technologies inspired dark theme */
+:root {
+  --bg-primary:    #131722;
+  --bg-secondary:  #1e222d;
+  --bg-toolbar:    #1a1d2e;
+  --border:        #2a2e39;
+  --text-primary:  #d1d4dc;
+  --text-muted:    #787b86;
+  --accent:        #2962ff;
+  --accent-hover:  #1e4fd6;
+  --bull:          #26a69a;
+  --bear:          #ef5350;
+  --font:          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 13px;
+}
+
+/* ─── Global Toolbar ─────────────────────────────────── */
+#global-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: 0 14px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.toolbar-left, .toolbar-right, .toolbar-center {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  letter-spacing: 0.3px;
+}
+
+/* WS status dot */
+.ws-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: background 0.3s;
+}
+.ws-dot.connected    { background: var(--bull); }
+.ws-dot.disconnected { background: var(--bear); }
+.ws-dot.connecting   { background: #f0b429; animation: pulse 1s infinite; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+/* Button group (layout switcher, period switcher) */
+.btn-group {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px;
+}
+
+.btn-group button {
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.btn-group button:hover  { background: var(--bg-secondary); color: var(--text-primary); }
+.btn-group button.active { background: var(--accent); color: #fff; }
+
+/* Workspace buttons */
+.btn-workspace {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.btn-workspace:hover { border-color: var(--accent); background: var(--bg-primary); }
+
+/* ─── Chart Grid ─────────────────────────────────────── */
+#chart-grid {
+  display: grid;
+  width: 100%;
+  height: calc(100vh - 44px);
+  gap: 1px;
+  background: var(--border);
+}
+
+#chart-grid.layout-1x1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+#chart-grid.layout-2x2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#chart-grid.layout-3x3 { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
+#chart-grid.layout-4x4 { grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); }
+
+/* ─── Panel ──────────────────────────────────────────── */
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Panel toolbar */
+.panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.panel-symbol-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+  min-width: 70px;
+}
+
+/* Symbol select */
+.symbol-select {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+.symbol-select:focus { border-color: var(--accent); }
+
+/* Period switcher inside panel — pushed right; panel-tools follows it */
+.period-switcher {
+  display: flex;
+  gap: 1px;
+  margin-left: auto;   /* pushes period+tools block to the right */
+}
+
+.period-switcher button {
+  height: 24px;
+  min-width: 34px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.period-switcher button:hover  { color: var(--text-primary); background: rgba(255,255,255,0.06); }
+.period-switcher button.active { color: var(--accent); font-weight: 600; }
+
+/* Panel tools (indicators / drawing / snapshot) */
+.panel-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+}
+
+.tool-btn {
+  height: 24px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.tool-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
+
+/* Dropdown wrapper */
+.tool-dropdown {
+  position: relative;
+}
+
+.dropdown-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 130px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 0;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.tool-dropdown.open .dropdown-menu { display: block; }
+
+.drop-item {
+  display: block;
+  width: 100%;
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.drop-item:hover  { background: rgba(255,255,255,0.06); color: var(--text-primary); }
+.drop-item.active { color: var(--accent); font-weight: 600; }
+
+/* Chart canvas wrapper */
+.chart-canvas {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+}
+
+/* Live indicator badge */
+.live-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--bull);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.live-badge::before {
+  content: '';
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--bull);
+  animation: pulse 1.2s infinite;
+}

@@ -1,0 +1,18 @@
+/node_modules
+/.pnpm-store
+/.idea
+/.vscode
+/website
+/dist
+/docs/.vitepress/cache
+/docs/node_modules
+
+.npmrc
+
+.DS_Store
+.cursor
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env

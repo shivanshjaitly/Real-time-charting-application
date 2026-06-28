@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Charting Platform</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <div id="app">
+      <!-- Global Toolbar -->
+      <header id="global-toolbar">
+        <div class="toolbar-left">
+          <span class="logo">📈 ChartPro</span>
+          <div id="ws-status" class="ws-dot disconnected" title="WebSocket status"></div>
+        </div>
+        <div class="toolbar-center">
+          <!-- Layout switcher -->
+          <div class="btn-group" id="layout-switcher" aria-label="Layout">
+            <button data-layout="1x1" class="active" type="button" title="Single chart">⬜ 1×1</button>
+            <button data-layout="2x2" type="button" title="Four charts">⊞ 2×2</button>
+            <button data-layout="3x3" type="button" title="Nine charts">⊟ 3×3</button>
+            <button data-layout="4x4" type="button" title="Sixteen charts">⊠ 4×4</button>
+          </div>
+        </div>
+        <div class="toolbar-right">
+          <button id="btn-save" class="btn-workspace" type="button" title="Save workspace">💾 Save</button>
+          <button id="btn-restore" class="btn-workspace" type="button" title="Restore workspace">📂 Restore</button>
+        </div>
+      </header>
+
+      <!-- Chart Grid -->
+      <main id="chart-grid" class="layout-1x1">
+        <!-- Panels are injected by main.js -->
+      </main>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
