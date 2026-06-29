@@ -133,13 +133,13 @@ Results: `backend/load-test/results.txt` | Screenshot: `backend/load-test/screen
 
 | Metric | Result |
 |---|---|
-| WS sessions | **14,683** |
+| WS sessions | **14,566** |
 | Connection errors | **0** (threshold: count < 10) ✓ |
-| Subscribe success rate | **100%** (threshold: rate > 99%) ✓ |
-| Message latency p(95) | **1.05 s** (threshold: p(95) < 1.5 s) ✓ |
-| WS messages delivered | **88,098** |
-| Data throughput | **162 MB at ~1.4 MB/s** |
-| k6 checks passed | **100%** (44,049 / 44,049) |
+| Subscribe success rate | **100%** (14,566 / 14,566) ✓ |
+| Message latency p(95) | **1.06 s** (threshold: p(95) < 1.5 s) ✓ |
+| WS messages delivered | **87,396** |
+| Data throughput | **253 MB at ~2.2 MB/s** |
+| k6 checks passed | **100%** (43,698 / 43,698) |
 
 > **Latency threshold note:** The p(95) threshold is set to 1,500 ms. The mock generator emits price ticks every ~1 second; server-side processing is <50 ms. See [DESIGN.md](./DESIGN.md) §Trade-offs.
 

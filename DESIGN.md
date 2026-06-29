@@ -105,13 +105,13 @@ The backend uses Python asyncio with FastAPI's native WebSocket support. Each We
 
 | Metric | Result | Threshold |
 |---|---|---|
-| WebSocket sessions | **14,683** | — |
+| WebSocket sessions | **14,566** | — |
 | Connection errors | **0** | count < 10 ✓ |
-| Subscribe success rate | **100%** (14,683 / 14,683) | rate > 99% ✓ |
-| Message latency p(95) | **1.05 s** | p(95) < 1.5 s ✓ |
-| WS messages delivered | **88,098** | — |
-| k6 checks passed | **100%** (44,049 / 44,049) | — |
-| Data throughput | **162 MB at ~1.4 MB/s** | — |
+| Subscribe success rate | **100%** (14,566 / 14,566) | rate > 99% ✓ |
+| Message latency p(95) | **1.06 s** | p(95) < 1.5 s ✓ |
+| WS messages delivered | **87,396** | — |
+| k6 checks passed | **100%** (43,698 / 43,698) | — |
+| Data throughput | **253 MB at ~2.2 MB/s** | — |
 
 **Latency threshold note:** The mock generator emits price ticks every ~1 real second (`CHART_TICK_INTERVAL_SECONDS`). Each tick updates the in-progress 1m candle and rolls up to higher intervals. The k6 threshold is set to 1,500 ms — server-side processing is <50 ms; observed latency is dominated by the tick interval.
 
