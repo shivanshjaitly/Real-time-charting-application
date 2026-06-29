@@ -25,10 +25,22 @@ function resolveWsUrl () {
   return 'ws://localhost:8000/ws'
 }
 
+function resolveApiBase () {
+  return WS_URL.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/ws$/, '')
+}
+
 const WS_URL = resolveWsUrl()
 const WORKSPACE_KEY = 'chartpro:workspace'
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AAPL', 'MSFT', 'TSLA', 'GOOGL', 'AMZN', 'NVDA']
+const FALLBACK_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AAPL', 'MSFT', 'TSLA', 'GOOGL', 'AMZN', 'NVDA']
+
+async function fetchSymbols () {
+  const res = await fetch(`${resolveApiBase()}/symbols`)
+  if (!res.ok) throw new Error(`symbols fetch failed: ${res.status}`)
+  const { symbols } = await res.json()
+  if (!Array.isArray(symbols) || symbols.length === 0) throw new Error('empty symbols list')
+  return symbols
+}
 
 const PERIODS = [
   { key: '1m',  label: '1m',  period: { span: 1,  type: 'minute' } },
@@ -192,10 +204,11 @@ class WSManager {
 // ─── Chart Panel ──────────────────────────────────────────────────────────────
 
 class ChartPanel {
-  constructor (panelEl, wsManager, symbol = 'BTCUSDT', interval = '1m') {
+  constructor (panelEl, wsManager, symbols, symbol = 'BTCUSDT', interval = '1m') {
     this._el               = panelEl
     this._ws               = wsManager
-    this._symbol           = symbol
+    this._symbols          = symbols
+    this._symbol           = symbols.includes(symbol) ? symbol : symbols[0]
     this._interval         = interval
     this._chart            = null
     this._unsubFn          = null
@@ -214,7 +227,7 @@ class ChartPanel {
     this._el.innerHTML = `
       <div class="panel-toolbar">
         <select class="symbol-select" aria-label="Symbol">
-          ${SYMBOLS.map(s => `<option value="${s}"${s === this._symbol ? ' selected' : ''}>${s}</option>`).join('')}
+          ${this._symbols.map(s => `<option value="${s}"${s === this._symbol ? ' selected' : ''}>${s}</option>`).join('')}
         </select>
         <span class="live-badge">LIVE</span>
         <div class="period-switcher">
@@ -284,11 +297,16 @@ class ChartPanel {
 
   _toggleIndicator (name) {
     if (!this._chart) return
+    const overlay = name === 'MA' || name === 'EMA' || name === 'BOLL'
     if (this._activeIndicators.has(name)) {
-      this._chart.removeIndicator(name)
+      this._chart.removeIndicator({ name })
       this._activeIndicators.delete(name)
     } else {
-      this._chart.createIndicator(name)
+      if (overlay) {
+        this._chart.createIndicator(name, { isStack: true, pane: { id: 'candle_pane' } })
+      } else {
+        this._chart.createIndicator(name)
+      }
       this._activeIndicators.add(name)
     }
     this._el.querySelectorAll('[data-ind]').forEach(btn =>
@@ -417,7 +435,8 @@ class ChartPanel {
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 class App {
-  constructor () {
+  constructor (symbols) {
+    this._symbols = symbols
     this._layout = '1x1'
     this._panels = []
     this._ws     = new WSManager()
@@ -477,7 +496,8 @@ class App {
       this._grid.appendChild(panelEl)
 
       const st = (states && states[i]) ? states[i] : defaults[i]
-      this._panels.push(new ChartPanel(panelEl, this._ws, st.symbol, st.interval))
+      const symbol = this._symbols.includes(st.symbol) ? st.symbol : this._symbols[0]
+      this._panels.push(new ChartPanel(panelEl, this._ws, this._symbols, symbol, st.interval))
     }
   }
 
@@ -513,9 +533,14 @@ class App {
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
-const app = new App()
+let app
 
-window.addEventListener('beforeunload', () => {
-  app._panels.forEach(p => p.destroy())
-  app._ws.destroy()
-})
+fetchSymbols()
+  .catch(() => FALLBACK_SYMBOLS)
+  .then((symbols) => {
+    app = new App(symbols)
+    window.addEventListener('beforeunload', () => {
+      app._panels.forEach(p => p.destroy())
+      app._ws.destroy()
+    })
+  })

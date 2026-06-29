@@ -15,7 +15,7 @@ from src.adapters.candle_store import CandleStore
 from src.adapters.generator import MockDataGenerator
 from src.adapters.pubsub import PubSub
 from src.api.ws_server import ConnectionManager
-from src.domain.entities.symbol import ALL_SYMBOLS, INTERVAL_MS, Interval, topic_key
+from src.domain.entities.symbol import ALL_SYMBOLS, INTERVAL_MS, Interval, Symbol, topic_key
 from src.domain.services.aggregator import AggregationEngine
 from src.infrastructure.config import get_settings
 from src.infrastructure.logging import get_logger, setup_logging
@@ -104,6 +104,10 @@ def create_app() -> FastAPI:
             "connections": manager.connection_count(),
             "pubsub_subscribers": pubsub.total_subscribers(),
         }
+
+    @app.get("/symbols")
+    async def symbols():
+        return {"symbols": [sym.value for sym in Symbol]}
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
