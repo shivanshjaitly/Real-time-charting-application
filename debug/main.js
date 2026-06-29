@@ -814,8 +814,23 @@ class ChartPanel {
     const viewport = this._el.querySelector('.chart-viewport')
     if (!viewport || viewport.dataset.zoomResetBound) return
     viewport.dataset.zoomResetBound = '1'
+    viewport.tabIndex = 0
+    viewport.title = 'Double-click or press R to reset zoom'
+
     viewport.addEventListener('auxclick', e => {
       if (e.button !== 1) return
+      e.preventDefault()
+      this._resetChartZoom()
+    })
+
+    viewport.addEventListener('dblclick', e => {
+      if (e.target.closest('.panel-toolbar')) return
+      e.preventDefault()
+      this._resetChartZoom()
+    })
+
+    viewport.addEventListener('keydown', e => {
+      if (e.key !== 'r' && e.key !== 'R') return
       e.preventDefault()
       this._resetChartZoom()
     })
