@@ -44,8 +44,8 @@ Open **http://localhost:5173** in your browser. The backend must be running firs
 
 **Features:**
 - Live candlestick charts with real-time WebSocket updates
-- Interval switching: 1m, 5m, 15m, 1h, 1d
-- Multi-layout views: 1×1, 2×2, 3×3, 4×4 grid
+- Interval switching: 1m, 5m, 15m, 1h, 1d (clock-aligned to local timezone; higher intervals derived from 1m only)
+- Multi-layout views: 1×1, 1×2, 2×1, 2×2, 2×3, 3×1, 3×3, 4×4 grid
 - 10 symbols: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, AAPL, MSFT, TSLA, GOOGL, AMZN, NVDA
 - Technical indicators: MA, EMA, BOLL, MACD, RSI, KDJ, CCI (toggle per panel)
 - Drawing tools: Trend Line, Horizontal, Ray Line, Price Line, Fibonacci, Segment
@@ -93,6 +93,8 @@ python3 server.py
 
 Backend runs at **http://localhost:8000**
 
+Startup seeds **4,320 1m bars per symbol** (~3 days) in parallel — typically **under 2 seconds**. Set `CHART_SEED_1M_BARS=10080` in env for ~7 days of 1d history (slower).
+
 - Health check: `GET http://localhost:8000/health`
 - WebSocket: `ws://localhost:8000/ws`
 
@@ -139,7 +141,18 @@ Results: `backend/load-test/results.txt` | Screenshot: `backend/load-test/screen
 | Data throughput | **162 MB at ~1.4 MB/s** |
 | k6 checks passed | **100%** (44,049 / 44,049) |
 
-> **Latency threshold note:** The p(95) threshold is set to 1,500 ms rather than a sub-second value. This is intentional and documented in [DESIGN.md](./DESIGN.md) §Trade-offs: the mock data generator emits exactly 1 candle per second (1 real second = 1 simulated minute), so the minimum observable message interval is ~1 s. A threshold below 1 s would always fail regardless of server performance. All server overhead is <50 ms; the 1 s median latency is purely the generator tick rate.
+> **Latency threshold note:** The p(95) threshold is set to 1,500 ms. The mock generator emits price ticks every ~1 second; server-side processing is <50 ms. See [DESIGN.md](./DESIGN.md) §Trade-offs.
+
+---
+
+## Backend Tests
+
+```bash
+cd backend
+python3 -m unittest discover -s tests -v
+```
+
+Tests cover 5×1m → 1×5m OHLCV rollup, in-place 1m tick updates, and bulk replay vs incremental aggregation.
 
 ---
 
@@ -160,10 +173,12 @@ Results: `backend/load-test/results.txt` | Screenshot: `backend/load-test/screen
       domain/
         entities/           ← Candle, Symbol, Interval
         services/
-          aggregator.py     ← Derives 5m/15m/1h/1d from 1m only
+          aggregator.py     ← 1m ticks → 1m candle → derives 5m/15m/1h/1d
+          seed.py             ← History seeding from 1m source only
+          time_utils.py       ← local calendar-aligned window floors
       adapters/
-        generator.py        ← Mock 1m candle generator
-        candle_store.py     ← In-memory ring buffer
+        generator.py        ← Sub-minute tick generator (1m source data)
+        candle_store.py     ← In-memory ring buffer (max 1000/topic)
         pubsub.py           ← Async pub/sub broker
       infrastructure/
         config.py           ← pydantic-settings
@@ -173,6 +188,9 @@ Results: `backend/load-test/results.txt` | Screenshot: `backend/load-test/screen
     load-test/
       script.js             ← k6 load test (1000 VUs)
       results.txt           ← Benchmark output
+    tests/
+      test_aggregator.py    ← OHLCV rollup correctness
+      test_seed.py          ← 1m-only seed pipeline
 
   DESIGN.md                 ← Architecture write-up
   README.md                 ← This file

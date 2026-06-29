@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
     tick_interval_seconds: float = 1.0   # live price tick interval (real seconds)
     history_candles: int = 200
+    # 1m bars generated at startup (4320 = 3 days). Higher intervals are derived from these.
+    # Increase via CHART_SEED_1M_BARS for deeper 1d/1h history (slower startup).
+    seed_1m_bars: int = 4320
+    # IANA timezone for candle boundaries (e.g. Asia/Kolkata). Empty = server local time.
+    candle_timezone: str = ""
     log_level: str = "INFO"
 
 

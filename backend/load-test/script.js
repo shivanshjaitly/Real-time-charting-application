@@ -7,6 +7,7 @@
  *   k6 run load-test/script.js
  *
  * Expected: p95 message latency < 1500ms at 1000 concurrent users (see DESIGN.md §Trade-offs).
+ * Generator emits price ticks every ~1s; p95 latency is bounded by tick rate, not server overhead.
  */
 
 import { check, sleep } from 'k6'

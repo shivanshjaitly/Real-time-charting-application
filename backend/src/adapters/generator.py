@@ -1,13 +1,10 @@
 """
-Mock Candle Generator
+Mock 1-Minute Candle Generator
 
-Generates realistic price ticks via random walk for all symbols.
-Uses real wall-clock time so candle windows align to clock boundaries
-(9:00–10:00, :00/:05/:10, etc.) and each interval updates in place
-until its window completes.
+Generates sub-minute price ticks via random walk. Ticks are rolled into 1m
+candles by the AggregationEngine; higher intervals are derived from 1m only.
 
-All intervals (1m, 5m, 15m, 1h, 1d) are derived by the AggregationEngine
-from these ticks.
+Uses real wall-clock time with calendar-aligned candle windows (local timezone).
 """
 
 import asyncio
@@ -57,7 +54,7 @@ def _generate_tick(prev_close: float) -> Candle:
     volume = max(1, round(volume_base * (1 + range_ratio * 40) * random.uniform(0.5, 1.5) * volume_spike))
 
     return Candle(
-        timestamp=0,  # window timestamp is assigned by the aggregator
+        timestamp=0,
         open=round(open_, 4),
         high=round(high, 4),
         low=round(low, 4),
@@ -66,21 +63,12 @@ def _generate_tick(prev_close: float) -> Candle:
     )
 
 
-def _generate_candle(prev_close: float, window_start: int, interval: Interval) -> Candle:
-    """Generate one completed historical candle for a given window."""
-    # Scale volatility by interval length
-    scale = {
-        Interval.ONE_MINUTE: 1.0,
-        Interval.FIVE_MINUTES: 2.0,
-        Interval.FIFTEEN_MINUTES: 3.0,
-        Interval.ONE_HOUR: 6.0,
-        Interval.ONE_DAY: 15.0,
-    }[interval]
+def _generate_1m_candle(prev_close: float, window_start: int) -> Candle:
+    """Generate one completed 1m historical candle."""
+    volatility = 0.003 + random.gauss(0, 0.0005)
+    volatility = max(0.001, min(0.012, volatility))
 
-    volatility = (0.003 + random.gauss(0, 0.0005)) * scale
-    volatility = max(0.001, min(0.012 * scale, volatility))
-
-    trend = random.gauss(0, 0.0002 * scale)
+    trend = random.gauss(0, 0.0002)
     shock = random.gauss(0, volatility)
 
     if random.random() < 0.03:
@@ -113,9 +101,11 @@ def _generate_candle(prev_close: float, window_start: int, interval: Interval) -
 
 class MockDataGenerator:
     """
-    Emits price ticks for all symbols on a fixed real-time interval.
+    Emits sub-minute price ticks for all symbols on a fixed real-time interval.
 
-    Callback signature: fn(symbol: str, tick: Candle, now_ms: int)
+    Callback signature: async/sync fn(symbol: str, tick: Candle, now_ms: int)
+    Only 1m data is produced (via tick accumulation). Higher timeframes are
+    derived by AggregationEngine.process_1m_candle().
     """
 
     def __init__(self) -> None:
@@ -129,6 +119,10 @@ class MockDataGenerator:
 
     def add_callback(self, fn: Callable[..., Any]) -> None:
         self._callbacks.append(fn)
+
+    def set_last_close(self, symbol: str, price: float) -> None:
+        """Align live tick prices with the end of seeded history."""
+        self._last_close[symbol] = price
 
     def start(self) -> None:
         if self._task is None:
@@ -162,19 +156,19 @@ class MockDataGenerator:
                     except Exception as e:
                         logger.error(f"Generator callback error: {e}")
 
-    def generate_history(self, symbol: str, interval: Interval, count: int) -> list[Candle]:
-        """Generate calendar-aligned historical candles ending before the current window."""
-        interval_ms = INTERVAL_MS[interval]
+    def generate_1m_history(self, symbol: str, count: int) -> list[Candle]:
+        """Generate calendar-aligned 1m candles ending before the current minute."""
+        interval_ms = INTERVAL_MS[Interval.ONE_MINUTE]
         now_ms = int(time.time() * 1000)
-        current_window = floor_to_interval(now_ms, interval)
+        current_window = floor_to_interval(now_ms, Interval.ONE_MINUTE)
         start_ts = current_window - count * interval_ms
 
-        candles: list[Candle] = []
         price = BASE_PRICES.get(Symbol(symbol), 1000.0)
+        candles: list[Candle] = []
 
         for i in range(count):
             ts = start_ts + i * interval_ms
-            candle = _generate_candle(price, ts, interval)
+            candle = _generate_1m_candle(price, ts)
             candles.append(candle)
             price = candle.close
 

@@ -41,13 +41,13 @@ HIGHER_INTERVALS: list[Interval] = [
     Interval.ONE_DAY,
 ]
 
-# Default history depth per interval (candles)
+# Default history depth per interval (candles served; capped by seed_1m_bars at startup)
 HISTORY_COUNTS: dict[Interval, int] = {
     Interval.ONE_MINUTE:       200,
     Interval.FIVE_MINUTES:     200,
     Interval.FIFTEEN_MINUTES:  200,
-    Interval.ONE_HOUR:         720,   # ~30 days
-    Interval.ONE_DAY:          365,   # ~1 year
+    Interval.ONE_HOUR:          72,   # 3 days at default seed depth
+    Interval.ONE_DAY:            3,   # 3 days at default seed depth
 }
 
 # Base prices for mock data generation

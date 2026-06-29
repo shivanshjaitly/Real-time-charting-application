@@ -42,6 +42,22 @@ async function fetchSymbols () {
   return symbols
 }
 
+function browserTimezone () {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone
+}
+
+async function fetchConfig () {
+  try {
+    const res = await fetch(`${resolveApiBase()}/config`)
+    if (!res.ok) throw new Error(`config fetch failed: ${res.status}`)
+    const { candle_timezone: candleTimezone } = await res.json()
+    if (typeof candleTimezone === 'string' && candleTimezone.length > 0) {
+      return { candleTimezone }
+    }
+  } catch (_) { /* backend may be offline during dev */ }
+  return { candleTimezone: browserTimezone() }
+}
+
 const PERIODS = [
   { key: '1m',  label: '1m',  period: { span: 1,  type: 'minute' } },
   { key: '5m',  label: '5m',  period: { span: 5,  type: 'minute' } },
@@ -123,19 +139,40 @@ const KLINE_STYLES = {
 
 class WSManager {
   constructor () {
-    this._ws              = null
-    this._ready           = false
-    this._queue           = []           // messages queued before connection opens
-    this._candleHandlers  = {}           // topic → fn(candle)
-    this._historyHandlers = {}           // topic → fn(candles[])
-    this._reconnectTimer  = null
+    this._ws               = null
+    this._ready            = false
+    this._queue            = []
+    this._candleHandlers   = {}           // topic → Set<fn>
+    this._historyHandlers  = {}           // topic → Set<fn> (one-shot per reconnect batch)
+    this._subRefCount      = {}           // topic → refcount for shared subscriptions
+    this._reconnectCbs     = []
+    this._reconnectTimer   = null
     this._intentionalClose = false
+    this._hadConnection    = false
     this._connect()
+  }
+
+  _topic (symbol, interval) {
+    return `${symbol}:${interval}`
+  }
+
+  _parseTopic (topic) {
+    const i = topic.indexOf(':')
+    return { symbol: topic.slice(0, i), interval: topic.slice(i + 1) }
   }
 
   _setStatus (s) {
     const el = document.getElementById('ws-status')
     if (el) { el.className = `ws-dot ${s}`; el.title = `WebSocket: ${s}` }
+  }
+
+  _resubscribeAll () {
+    for (const topic of Object.keys(this._subRefCount)) {
+      if (this._subRefCount[topic] > 0) {
+        const { symbol, interval } = this._parseTopic(topic)
+        this._send({ type: 'subscribe', symbol, interval })
+      }
+    }
   }
 
   _connect () {
@@ -145,19 +182,26 @@ class WSManager {
     this._ws.onopen = () => {
       this._ready = true
       this._setStatus('connected')
-      // Flush queued messages
       while (this._queue.length) this._ws.send(this._queue.shift())
+      if (this._hadConnection) {
+        this._reconnectCbs.forEach(fn => fn())
+        this._resubscribeAll()
+      }
+      this._hadConnection = true
     }
 
     this._ws.onmessage = ({ data }) => {
       let msg; try { msg = JSON.parse(data) } catch { return }
-      const topic = `${msg.symbol}:${msg.interval}`
+      const topic = this._topic(msg.symbol, msg.interval)
       if (msg.type === 'history') {
-        const h = this._historyHandlers[topic]
-        if (h) { h(msg.data || []); delete this._historyHandlers[topic] }
+        const handlers = this._historyHandlers[topic]
+        if (handlers) {
+          handlers.forEach(fn => fn(msg.data || []))
+          delete this._historyHandlers[topic]
+        }
       } else if (msg.type === 'candle') {
-        const fn = this._candleHandlers[topic]
-        if (fn) fn(msg.data)
+        const handlers = this._candleHandlers[topic]
+        if (handlers) handlers.forEach(fn => fn(msg.data))
       }
     }
 
@@ -181,20 +225,62 @@ class WSManager {
     }
   }
 
+  /** Register callback fired after WS reconnects (not initial connect). */
+  onReconnect (fn) {
+    this._reconnectCbs.push(fn)
+    return () => {
+      this._reconnectCbs = this._reconnectCbs.filter(f => f !== fn)
+    }
+  }
+
   /** Register a one-shot history callback for symbol:interval */
   onHistory (symbol, interval, fn) {
-    this._historyHandlers[`${symbol}:${interval}`] = fn
+    const topic = this._topic(symbol, interval)
+    if (!this._historyHandlers[topic]) this._historyHandlers[topic] = new Set()
+    this._historyHandlers[topic].add(fn)
+    return () => { this._historyHandlers[topic]?.delete(fn) }
   }
 
-  /** Register live candle callback. Returns unsubscribe fn. */
+  /** Cancel pending history callback(s) */
+  cancelHistory (symbol, interval = null) {
+    if (interval) {
+      delete this._historyHandlers[this._topic(symbol, interval)]
+      return
+    }
+    const prefix = `${symbol}:`
+    for (const key of Object.keys(this._historyHandlers)) {
+      if (key.startsWith(prefix)) delete this._historyHandlers[key]
+    }
+  }
+
+  /** Register live candle callback. Returns unsubscribe fn. Multicast-safe. */
   onCandle (symbol, interval, fn) {
-    const topic = `${symbol}:${interval}`
-    this._candleHandlers[topic] = fn
-    return () => { delete this._candleHandlers[topic] }
+    const topic = this._topic(symbol, interval)
+    if (!this._candleHandlers[topic]) this._candleHandlers[topic] = new Set()
+    this._candleHandlers[topic].add(fn)
+    return () => {
+      this._candleHandlers[topic]?.delete(fn)
+      if (this._candleHandlers[topic]?.size === 0) delete this._candleHandlers[topic]
+    }
   }
 
-  subscribe   (symbol, interval) { this._send({ type: 'subscribe',   symbol, interval }) }
-  unsubscribe (symbol, interval) { this._send({ type: 'unsubscribe', symbol, interval }) }
+  subscribe (symbol, interval) {
+    const topic = this._topic(symbol, interval)
+    this._subRefCount[topic] = (this._subRefCount[topic] || 0) + 1
+    if (this._subRefCount[topic] === 1) {
+      this._send({ type: 'subscribe', symbol, interval })
+    }
+  }
+
+  unsubscribe (symbol, interval) {
+    const topic = this._topic(symbol, interval)
+    if (!this._subRefCount[topic]) return
+    this._subRefCount[topic] -= 1
+    if (this._subRefCount[topic] <= 0) {
+      delete this._subRefCount[topic]
+      this._send({ type: 'unsubscribe', symbol, interval })
+    }
+  }
 
   destroy () {
     this._intentionalClose = true
@@ -206,16 +292,18 @@ class WSManager {
 // ─── Chart Panel ──────────────────────────────────────────────────────────────
 
 class ChartPanel {
-  constructor (panelEl, wsManager, symbols, symbol = 'BTCUSDT', interval = '1m', indicators = []) {
+  constructor (panelEl, wsManager, symbols, timezone, symbol = 'BTCUSDT', interval = '1m', indicators = []) {
     this._el               = panelEl
     this._ws               = wsManager
     this._symbols          = symbols
+    this._timezone         = timezone
     this._symbol           = symbols.includes(symbol) ? symbol : symbols[0]
     this._interval         = interval
     this._chart            = null
     this._unsubFn          = null
     this._activeIndicators = new Set(Array.isArray(indicators) ? indicators : [])
     this._closeDropdowns   = null
+    this._loadGen          = 0
 
     this._render()
     this._mountChart()
@@ -257,7 +345,15 @@ class ChartPanel {
           <button class="tool-btn snap-btn" type="button" title="Download chart snapshot">📷</button>
         </div>
       </div>
-      <div class="chart-canvas"></div>
+      <div class="chart-viewport">
+        <div class="chart-canvas"></div>
+        <div class="chart-loading" hidden aria-live="polite">
+          <div class="chart-loading-inner">
+            <span class="chart-loading-spinner"></span>
+            <span class="chart-loading-text">Loading…</span>
+          </div>
+        </div>
+      </div>
     `
 
     this._el.querySelector('.symbol-select').addEventListener('change', e => this._changeSymbol(e.target.value))
@@ -303,6 +399,24 @@ class ChartPanel {
     this._el.querySelectorAll('.period-switcher button').forEach(btn =>
       btn.classList.toggle('active', btn.dataset.period === this._interval)
     )
+  }
+
+  _setLoading (show) {
+    const el = this._el.querySelector('.chart-loading')
+    if (el) el.hidden = !show
+  }
+
+  _clearDrawings () {
+    if (this._chart) this._chart.removeOverlay()
+  }
+
+  /** Bump generation, cancel stale history, show loading overlay */
+  _prepareDataTransition () {
+    this._loadGen += 1
+    this._ws.cancelHistory(this._symbol, this._interval)
+    this._setLoading(true)
+    this._clearDrawings()
+    return this._loadGen
   }
 
   _createIndicatorOnChart (name) {
@@ -388,7 +502,7 @@ class ChartPanel {
           { type: 'indicator', content: ['VOL'] },
         ],
       },
-      timezone: 'UTC',
+      timezone: this._timezone,
     })
 
     this._chart.setStyles(KLINE_STYLES)
@@ -403,6 +517,7 @@ class ChartPanel {
     })
     this._chart.setPeriod(periodCfg.period)
 
+    this._prepareDataTransition()
     this._chart.setDataLoader({
       getBars: ({ type, period, symbol, callback }) => {
         if (type !== 'init') {
@@ -412,7 +527,12 @@ class ChartPanel {
         }
         const intervalKey = periodToKey(period)
         const ticker = symbol.ticker
+        const loadGen = self._loadGen
+        self._setLoading(true)
+
         self._ws.onHistory(ticker, intervalKey, (candles) => {
+          if (loadGen !== self._loadGen) return
+          self._setLoading(false)
           callback(candles, { forward: true, backward: false })
           self._applyActiveIndicators()
         })
@@ -447,6 +567,7 @@ class ChartPanel {
     if (this._chart) {
       this._ws.unsubscribe(this._symbol, this._interval)
       if (this._unsubFn) { this._unsubFn(); this._unsubFn = null }
+      this._ws.cancelHistory(this._symbol, this._interval)
       dispose(this._chart)
       this._chart = null
     }
@@ -465,12 +586,20 @@ class ChartPanel {
     if (intervalKey === this._interval) return
     this._interval = intervalKey
     this._updatePeriodButtons()
+    this._prepareDataTransition()
 
     const periodCfg = PERIODS.find(p => p.key === intervalKey)
     if (periodCfg && this._chart) {
       // setPeriod triggers unsubscribeBar → getBars(init) → subscribeBar automatically
       this._chart.setPeriod(periodCfg.period)
     }
+  }
+
+  /** Reload history + live subscription after WebSocket reconnect */
+  reconnect () {
+    if (!this._chart) return
+    this._prepareDataTransition()
+    this._chart.resetData()
   }
 
   // ── Workspace ────────────────────────────────────────────────────────────────
@@ -485,6 +614,8 @@ class ChartPanel {
 
   destroy () {
     this._teardownChartSubscription()
+    this._ws.cancelHistory(this._symbol, this._interval)
+    this._setLoading(false)
     if (this._chart) { dispose(this._chart); this._chart = null }
     if (this._closeDropdowns) { document.removeEventListener('click', this._closeDropdowns); this._closeDropdowns = null }
   }
@@ -493,12 +624,17 @@ class ChartPanel {
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 class App {
-  constructor (symbols) {
-    this._symbols = symbols
+  constructor (symbols, timezone) {
+    this._symbols   = symbols
+    this._timezone  = timezone
     this._layout = '1x1'
     this._panels = []
     this._ws     = new WSManager()
     this._grid   = document.getElementById('chart-grid')
+
+    this._ws.onReconnect(() => {
+      this._panels.forEach(p => p.reconnect())
+    })
 
     this._bindControls()
     this._applyLayout('1x1')
@@ -557,7 +693,7 @@ class App {
 
       const st = (states && states[i]) ? states[i] : defaults[i]
       const symbol = this._symbols.includes(st.symbol) ? st.symbol : this._symbols[0]
-      this._panels.push(new ChartPanel(panelEl, this._ws, this._symbols, symbol, st.interval, st.indicators))
+      this._panels.push(new ChartPanel(panelEl, this._ws, this._symbols, this._timezone, symbol, st.interval, st.indicators))
     }
   }
 
@@ -595,12 +731,14 @@ class App {
 
 let app
 
-fetchSymbols()
-  .catch(() => FALLBACK_SYMBOLS)
-  .then((symbols) => {
-    app = new App(symbols)
-    window.addEventListener('beforeunload', () => {
-      app._panels.forEach(p => p.destroy())
-      app._ws.destroy()
-    })
+Promise.all([
+  fetchSymbols().catch(() => FALLBACK_SYMBOLS),
+  fetchConfig(),
+]).then(([symbols, config]) => {
+  const timezone = config.candleTimezone || browserTimezone()
+  app = new App(symbols, timezone)
+  window.addEventListener('beforeunload', () => {
+    app._panels.forEach(p => p.destroy())
+    app._ws.destroy()
   })
+})

@@ -35,38 +35,43 @@ The application is built inside the KlineCharts open-source library codebase. Th
 │  └───────────────────────┬─────────────────────────────────────┘   │
 │                          │ publish on every candle update         │
 │  ┌───────────────────────┴────────────────────────────────────┐   │
-│  │  MockDataGenerator (1m ticks only)                         │   │
-│  └───────────────────────┬────────────────────────────────────┘   │
-│                          │ 1m candle per symbol                   │
+│  │  MockDataGenerator (sub-minute ticks → 1m only)              │   │
+│  └───────────────────────┬─────────────────────────────────────┘   │
+│                          │ tick per symbol (~1/s)                   │
 │  ┌───────────────────────┴────────────────────────────────────┐   │
-│  │  AggregationEngine → derives 5m / 15m / 1h / 1d           │   │
-│  └───────────────────────┬────────────────────────────────────┘   │
+│  │  AggregationEngine                                           │   │
+│  │    process_tick → in-progress 1m candle                      │   │
+│  │    process_1m_candle → derives 5m / 15m / 1h / 1d ONLY     │   │
+│  └───────────────────────┬─────────────────────────────────────┘   │
 │                          │ append                                  │
 │  ┌───────────────────────┴────────────────────────────────────┐   │
-│  │  CandleStore (deque maxlen=200 per topic)                  │   │
+│  │  CandleStore (deque maxlen=1000 per topic)                   │   │
 │  └────────────────────────────────────────────────────────────┘   │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
 ### Frontend (debug/)
 
-Each **ChartPanel** owns a KlineCharts instance wired via `setDataLoader()` — `getBars` for history, `subscribeBar` for live candles. A single **WSManager** multiplexes all panel subscriptions over one WebSocket. Layout modes (1×1 through 4×4), symbol/interval selectors, and workspace save/restore (localStorage) are handled in `debug/main.js` without adding external frontend dependencies.
+Each **ChartPanel** owns a KlineCharts instance wired via `setDataLoader()` — `getBars` for history, `subscribeBar` for live candles. A single **WSManager** multiplexes all panel subscriptions over one WebSocket. Layout modes (1×1, 1×2, 2×1, 2×2, 2×3, 3×1, 3×3, 4×4), symbol/interval selectors, loading overlay on interval switch, and workspace save/restore (localStorage) are handled in `debug/main.js` without adding external frontend dependencies.
 
-### Data Flow (per 1m tick)
+### Data Flow (live tick → 1m → higher intervals)
 
 ```
-Generator → 1m Candle (BTCUSDT, ts=T)
+Generator → sub-minute tick (BTCUSDT)
     │
-    ├─→ CandleStore.append("BTCUSDT:1m", candle)
-    ├─→ PubSub.publish("BTCUSDT:1m", candle)  →  all 1m subscribers
-    │
-    └─→ AggregationEngine.process_1m_candle("BTCUSDT", candle)
+    └─→ AggregationEngine.process_tick()
             │
-            ├─→ 5m window: update high/low/close/volume → CandleStore + PubSub("BTCUSDT:5m")
-            ├─→ 15m window: update high/low/close/volume → CandleStore + PubSub("BTCUSDT:15m")
-            ├─→ 1h window:  update high/low/close/volume → CandleStore + PubSub("BTCUSDT:1h")
-            └─→ 1d window:  update high/low/close/volume → CandleStore + PubSub("BTCUSDT:1d")
+            ├─→ accumulate into in-progress 1m candle (clock-aligned local)
+            │       → CandleStore + PubSub("BTCUSDT:1m")
+            │
+            └─→ process_1m_candle(current 1m bar)
+                    ├─→ 5m  → CandleStore + PubSub("BTCUSDT:5m")
+                    ├─→ 15m → CandleStore + PubSub("BTCUSDT:15m")
+                    ├─→ 1h  → CandleStore + PubSub("BTCUSDT:1h")
+                    └─→ 1d  → CandleStore + PubSub("BTCUSDT:1d")
 ```
+
+**History seeding** (`seed.py`): generates 4,320 1m candles per symbol by default (~3 days), replays through `replay_1m_history()` in parallel across symbols (~1–2s startup). Increase `CHART_SEED_1M_BARS` for deeper 1d/1h history.
 
 ---
 
@@ -108,7 +113,7 @@ The backend uses Python asyncio with FastAPI's native WebSocket support. Each We
 | k6 checks passed | **100%** (44,049 / 44,049) | — |
 | Data throughput | **162 MB at ~1.4 MB/s** | — |
 
-**Latency threshold note:** The mock generator emits exactly 1 candle per real second (1 simulated minute). The minimum observable message interval is therefore ~1 s. The k6 threshold is set to 1,500 ms — not sub-second — so the test measures server overhead rather than generator tick rate. Server-side processing is <50 ms; the ~1 s median latency is dominated by the generator interval.
+**Latency threshold note:** The mock generator emits price ticks every ~1 real second (`CHART_TICK_INTERVAL_SECONDS`). Each tick updates the in-progress 1m candle and rolls up to higher intervals. The k6 threshold is set to 1,500 ms — server-side processing is <50 ms; observed latency is dominated by the tick interval.
 
 ### Where it breaks next
 
@@ -152,24 +157,29 @@ Long-polling cannot sustain 1,000 concurrent real-time streams efficiently. Each
 
 | Decision | Assumption | Reasoning |
 |---|---|---|
-| **1 real second = 1 simulated minute** | Time compression for demo | A real trading platform generates 1 candle per minute. For a 3-day assignment demo, accelerated time is required to observe live updates. Also drives the k6 p(95) latency threshold (1,500 ms): sub-second thresholds would always fail regardless of server performance. |
+| **Real wall-clock ticks (~1/s)** | Demo uses actual minute/hour/day boundaries | Candles align to local clock (:00, :05, top-of-hour, midnight). 1m bars update in place until the minute completes; higher intervals roll up from 1m only. |
 | **In-memory candle store** | No persistence across restarts | The assignment asks for real-time streaming, not historical persistence. Adding a database would add complexity without demonstrating the core system. |
 | **Single WebSocket connection per browser tab** | All panels share one WS | Multiplexing all symbol:interval subscriptions over one connection is more efficient than one WS per panel. Standard practice in trading platforms. |
-| **10 mock symbols (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, AAPL, MSFT, TSLA, GOOGL, AMZN, NVDA)** | Symbols not specified in brief | The brief references "selected symbols" without specifying which. 10 symbols covering major crypto and equity demonstrates the multi-symbol workspace feature at a realistic scale. |
-| **localStorage for workspace persistence** | No user auth required | The brief says "persist and be restorable" without specifying a persistence backend. localStorage is zero-dependency and correct for a single-user scenario. |
-| **History: 200 candles per topic** | "Reasonable" not specified | 200 candles provides meaningful chart context without excessive memory usage (~60KB per topic as JSON). |
-| **Higher-interval open candle published live** | "Restorable" partially open candle | When a 5m candle is in progress, subscribers receive rolling updates (close, high, low update on each 1m tick). This is correct trading terminal behavior — the candle is live until the window closes. |
-| **Out-of-order candles not handled** | Mock generator guarantees monotonic timestamps | The aggregator uses `window_start = floor(ts / interval_ms) * interval_ms` and assumes candles arrive in increasing timestamp order. A late-arriving 1m candle would compute a stale `window_start`, causing it to overwrite the in-progress candle with incorrect data. This is a conscious deferral: the mock generator never produces out-of-order data, so the edge case cannot trigger. In production the fix is a reorder buffer with a configurable late-arrival tolerance (typically 1–2 seconds for exchange feeds), applied before the aggregation engine. |
+| **10 mock symbols** | Symbols not specified in brief | 10 symbols covering major crypto and equity demonstrates the multi-symbol workspace feature at a realistic scale. |
+| **localStorage for workspace persistence** | No user auth required | Zero-dependency and correct for a single-user scenario. |
+| **Variable history depth** | Mock startup speed vs depth | Default: 4,320 1m bars (~3 days) → 200 1m/5m/15m, 72 1h, 3 1d candles. Set `CHART_SEED_1M_BARS` for more. All derived from 1m. |
+| **Local candle alignment** | Boundaries match chart labels | `floor_to_interval()` uses `CHART_CANDLE_TIMEZONE` (default: server local). Frontend reads `/config` and sets the chart to the same IANA zone. |
+| **Higher-interval open candle published live** | Correct trading-terminal behaviour | When a 5m candle is in progress, subscribers receive rolling updates as each 1m sub-candle arrives. |
+| **Out-of-order candles not handled** | Mock generator guarantees monotonic timestamps | In production, apply a reorder buffer before the aggregation engine. |
 
 ---
 
 ## 6. Aggregation Correctness
 
-All higher-interval candles are derived strictly from 1-minute data only. The rules implemented in `backend/src/domain/services/aggregator.py`:
+All higher-interval candles are derived **strictly from 1-minute data only** — both live and at seed time. Implemented in `backend/src/domain/services/aggregator.py`:
 
 ```
-For each 1m candle arriving for symbol S at timestamp T:
-  window_start = floor(T / interval_ms) * interval_ms
+Live: sub-minute tick
+  → process_tick: accumulate into in-progress 1m candle (local window start)
+  → process_1m_candle(1m bar): roll up into 5m / 15m / 1h / 1d
+
+For each 1m candle at timestamp T:
+  window_start = floor_to_interval(T, interval)   # local calendar alignment
 
   If no candle open for this window:
     open   = 1m.open              ← first sub-candle's open, NEVER changes
@@ -179,11 +189,28 @@ For each 1m candle arriving for symbol S at timestamp T:
     volume = 1m.volume
 
   Else (window already open):
-    open   = UNCHANGED            ← strictly preserved
+    open   = UNCHANGED
     high   = max(existing.high, 1m.high)
     low    = min(existing.low,  1m.low)
     close  = 1m.close             ← always the last sub-candle
     volume = existing.volume + 1m.volume
 ```
 
-This is applied identically for 5m, 15m, 1h, and 1d windows.
+Unit tests in `backend/tests/` verify 5×1m → 1×5m OHLCV correctness and that bulk replay matches incremental aggregation.
+
+### Sub-minute ticks vs 1-minute source (Requirement.md §03)
+
+The brief requires mock data at the **1-minute** timeframe only. The generator emits **sub-minute price ticks** (~1 per second) for smooth live updates, but these are **not** separate data products — they are accumulated into a single in-progress **1m candle** by `process_tick()`. Only that 1m bar (complete or in-progress) is passed to `process_1m_candle()` to derive 5m, 15m, 1h, and 1d. No higher interval reads tick data directly.
+
+---
+
+## 7. Known Limitations
+
+| Limitation | Impact | Mitigation |
+|---|---|---|
+| History pagination not implemented | Cannot scroll left for older bars | Documented; store holds fixed depth per interval |
+| Per-client timezone | All clients share one backend zone | Set `CHART_CANDLE_TIMEZONE` on the server; frontend syncs via `GET /config`. For multi-region, pass timezone per session (not implemented). |
+| No WebSocket heartbeat | Idle connections may drop behind proxies | Client auto-reconnects and resubscribes all panels |
+| ~3 days default 1d history | 1d chart shows 3 candles at default seed depth | Set `CHART_SEED_1M_BARS=10080` for ~7 days |
+| Mock data only | No real exchange feed | Appropriate for assignment scope |
+| Out-of-order ticks not handled | Late ticks could corrupt open candle | Mock generator is monotonic; production needs reorder buffer |
