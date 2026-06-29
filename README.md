@@ -93,7 +93,7 @@ python3 server.py
 
 Backend runs at **http://localhost:8000**
 
-Startup seeds **4,320 1m bars per symbol** (~3 days) in parallel — typically **under 2 seconds**. Set `CHART_SEED_1M_BARS=10080` in env for ~7 days of 1d history (slower).
+Startup seeds **14,400 1m bars per symbol** (~10 days) in parallel — typically **under 2 seconds**. Set `CHART_SEED_1M_BARS=4320` for faster cold start with ~3 days of 1d/1h history.
 
 - Health check: `GET http://localhost:8000/health`
 - WebSocket: `ws://localhost:8000/ws`

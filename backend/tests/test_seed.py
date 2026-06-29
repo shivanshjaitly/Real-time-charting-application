@@ -31,6 +31,21 @@ class SeedTests(unittest.TestCase):
             self.assertEqual(bulk_series[interval][-1].high, last[interval].high)
             self.assertEqual(bulk_series[interval][-1].low, last[interval].low)
 
+    def test_hybrid_history_covers_1d_depth(self) -> None:
+        """Hybrid seed should produce ~10 days of 1d candles within startup budget."""
+        from src.adapters.candle_store import CandleStore
+        from src.domain.services.seed import seed_history
+
+        store = CandleStore()
+        agg = AggregationEngine()
+        gen = MockDataGenerator()
+        seed_history(gen, store, agg)
+
+        daily = store.get_history("BTCUSDT:1d")
+        hourly = store.get_history("BTCUSDT:1h")
+        self.assertGreaterEqual(len(daily), 10)
+        self.assertGreaterEqual(len(hourly), 240)
+
     def test_seed_1m_bars_is_reasonable_default(self) -> None:
         bars = required_1m_seed_bars()
         self.assertGreaterEqual(bars, 200)

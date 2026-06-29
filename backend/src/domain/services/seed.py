@@ -1,5 +1,6 @@
 """Historical data seeding — 1m source only, higher intervals derived."""
 
+import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from src.adapters.candle_store import CandleStore
@@ -8,8 +9,8 @@ from src.domain.entities.candle import Candle
 from src.domain.entities.symbol import (
     ALL_SYMBOLS,
     HIGHER_INTERVALS,
-    HISTORY_COUNTS,
     Interval,
+    history_counts_for_seed,
     topic_key,
 )
 from src.domain.services.aggregator import AggregationEngine
@@ -53,13 +54,14 @@ def seed_history(
     in-progress higher-interval windows without a discontinuity.
     """
     bars_1m = required_1m_seed_bars()
-    logger.info(f"Seeding history — {bars_1m:,} 1m bars/symbol (parallel)")
+    history_counts = history_counts_for_seed(bars_1m)
+    logger.info(f"Seeding history — {bars_1m:,} 1m bars/symbol (parallel, hybrid)")
 
     symbol_values = [sym.value for sym in ALL_SYMBOLS]
     results: list[tuple[str, list[Candle], dict, dict, float]] = []
+    workers = min(len(symbol_values), os.cpu_count() or 4)
 
-    # Parallel seed across symbols (each worker is independent)
-    with ProcessPoolExecutor(max_workers=min(len(symbol_values), 4)) as pool:
+    with ProcessPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(_seed_one_symbol, sym, bars_1m): sym for sym in symbol_values
         }
@@ -75,11 +77,11 @@ def seed_history(
     for sym_value, candles_1m, higher_series, open_higher, last_close in results:
         store.seed(
             topic_key(sym_value, Interval.ONE_MINUTE.value),
-            candles_1m[-HISTORY_COUNTS[Interval.ONE_MINUTE]:],
+            candles_1m[-history_counts[Interval.ONE_MINUTE]:],
         )
 
         for interval in HIGHER_INTERVALS:
-            count = HISTORY_COUNTS[interval]
+            count = history_counts[interval]
             store.seed(topic_key(sym_value, interval.value), higher_series[interval][-count:])
 
         aggregator.load_open_higher_candles(sym_value, open_higher)

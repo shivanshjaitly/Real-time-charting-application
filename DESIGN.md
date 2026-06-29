@@ -71,7 +71,7 @@ Generator → sub-minute tick (BTCUSDT)
                     └─→ 1d  → CandleStore + PubSub("BTCUSDT:1d")
 ```
 
-**History seeding** (`seed.py`): generates 4,320 1m candles per symbol by default (~3 days), replays through `replay_1m_history()` in parallel across symbols (~1–2s startup). Increase `CHART_SEED_1M_BARS` for deeper 1d/1h history.
+**History seeding** (`seed.py`): generates 14,400 1m candles per symbol by default (~10 days) using a hybrid coarse-hourly + fine-minute tail, replays through `replay_1m_history()` in parallel across symbols (~1–2s startup). Increase `CHART_SEED_1M_BARS` for deeper 1d/1h history.
 
 ---
 
@@ -162,7 +162,7 @@ Long-polling cannot sustain 1,000 concurrent real-time streams efficiently. Each
 | **Single WebSocket connection per browser tab** | All panels share one WS | Multiplexing all symbol:interval subscriptions over one connection is more efficient than one WS per panel. Standard practice in trading platforms. |
 | **10 mock symbols** | Symbols not specified in brief | 10 symbols covering major crypto and equity demonstrates the multi-symbol workspace feature at a realistic scale. |
 | **localStorage for workspace persistence** | No user auth required | Zero-dependency and correct for a single-user scenario. |
-| **Variable history depth** | Mock startup speed vs depth | Default: 4,320 1m bars (~3 days) → 200 1m/5m/15m, 72 1h, 3 1d candles. Set `CHART_SEED_1M_BARS` for more. All derived from 1m. |
+| **Variable history depth** | Mock startup speed vs depth | Default: 14,400 1m bars (~10 days) → 200 1m/5m/15m, 240 1h, 10 1d candles. Hybrid hourly seed for the old tail keeps startup under ~2s. Set `CHART_SEED_1M_BARS` for more. All derived from 1m. |
 | **Local candle alignment** | Boundaries match chart labels | `floor_to_interval()` uses `CHART_CANDLE_TIMEZONE` (default: server local). Frontend reads `/config` and sets the chart to the same IANA zone. |
 | **Higher-interval open candle published live** | Correct trading-terminal behaviour | When a 5m candle is in progress, subscribers receive rolling updates as each 1m sub-candle arrives. |
 | **Out-of-order candles not handled** | Mock generator guarantees monotonic timestamps | In production, apply a reorder buffer before the aggregation engine. |
@@ -211,6 +211,6 @@ The brief requires mock data at the **1-minute** timeframe only. The generator e
 | History pagination not implemented | Cannot scroll left for older bars | Documented; store holds fixed depth per interval |
 | Per-client timezone | All clients share one backend zone | Set `CHART_CANDLE_TIMEZONE` on the server; frontend syncs via `GET /config`. For multi-region, pass timezone per session (not implemented). |
 | No WebSocket heartbeat | Idle connections may drop behind proxies | Client auto-reconnects and resubscribes all panels |
-| ~3 days default 1d history | 1d chart shows 3 candles at default seed depth | Set `CHART_SEED_1M_BARS=10080` for ~7 days |
+| ~10 days default 1d history | 1d chart shows 10 daily candles at default seed depth | Set `CHART_SEED_1M_BARS=43200` for ~30 days (hybrid seed keeps startup fast) |
 | Mock data only | No real exchange feed | Appropriate for assignment scope |
 | Out-of-order ticks not handled | Late ticks could corrupt open candle | Mock generator is monotonic; production needs reorder buffer |

@@ -63,6 +63,43 @@ def _generate_tick(prev_close: float) -> Candle:
     )
 
 
+def _generate_hourly_as_1m(prev_close: float, hour_start: int) -> Candle:
+    """One synthetic 1m candle representing a full hour (fast deep-history seeding)."""
+    volatility = 0.008 + random.gauss(0, 0.001)
+    volatility = max(0.003, min(0.025, volatility))
+
+    trend = random.gauss(0, 0.0005)
+    shock = random.gauss(0, volatility)
+    if random.random() < 0.04:
+        shock += random.gauss(0, volatility * 2.5)
+
+    open_ = prev_close
+    close = max(0.01, open_ * (1 + trend + shock))
+
+    body_high = max(open_, close)
+    body_low = min(open_, close)
+    wick = volatility * random.uniform(0.4, 2.0)
+    high = body_high * (1 + wick * random.uniform(0.15, 0.9))
+    low = max(0.01, body_low * (1 - wick * random.uniform(0.15, 0.9)))
+
+    range_ratio = (high - low) / open_
+    volume_base = 25_000 + open_ * 8
+    volume_spike = random.uniform(1.5, 3.5) if random.random() < 0.06 else 1.0
+    volume = max(
+        1,
+        round(volume_base * (1 + range_ratio * 40) * random.uniform(0.7, 1.3) * volume_spike),
+    )
+
+    return Candle(
+        timestamp=hour_start,
+        open=round(open_, 4),
+        high=round(high, 4),
+        low=round(low, 4),
+        close=round(close, 4),
+        volume=volume,
+    )
+
+
 def _generate_1m_candle(prev_close: float, window_start: int) -> Candle:
     """Generate one completed 1m historical candle."""
     volatility = 0.003 + random.gauss(0, 0.0005)
@@ -158,6 +195,13 @@ class MockDataGenerator:
 
     def generate_1m_history(self, symbol: str, count: int) -> list[Candle]:
         """Generate calendar-aligned 1m candles ending before the current minute."""
+        settings = get_settings()
+        fine_tail = min(settings.seed_fine_1m_bars, count)
+        if count > fine_tail + 60:
+            return self._generate_hybrid_1m_history(symbol, count, fine_tail)
+        return self._generate_fine_1m_history(symbol, count)
+
+    def _generate_fine_1m_history(self, symbol: str, count: int) -> list[Candle]:
         interval_ms = INTERVAL_MS[Interval.ONE_MINUTE]
         now_ms = int(time.time() * 1000)
         current_window = floor_to_interval(now_ms, Interval.ONE_MINUTE)
@@ -173,3 +217,38 @@ class MockDataGenerator:
             price = candle.close
 
         return candles
+
+    def _generate_hybrid_1m_history(
+        self, symbol: str, total_bars: int, fine_tail_bars: int
+    ) -> list[Candle]:
+        """
+        Fast deep history: hourly synthetic 1m for the old tail, full 1m for recent data.
+
+        Coarse section only feeds 1h/1d store slices; fine tail preserves 1m/5m/15m accuracy.
+        """
+        minute_ms = INTERVAL_MS[Interval.ONE_MINUTE]
+        hour_ms = INTERVAL_MS[Interval.ONE_HOUR]
+        now_ms = int(time.time() * 1000)
+        current_window = floor_to_interval(now_ms, Interval.ONE_MINUTE)
+        total_start = current_window - total_bars * minute_ms
+        fine_start = current_window - fine_tail_bars * minute_ms
+
+        price = BASE_PRICES.get(Symbol(symbol), 1000.0)
+        coarse: list[Candle] = []
+
+        hour_start = floor_to_interval(total_start, Interval.ONE_HOUR)
+        while hour_start < fine_start:
+            candle = _generate_hourly_as_1m(price, hour_start)
+            coarse.append(candle)
+            price = candle.close
+            hour_start += hour_ms
+
+        fine: list[Candle] = []
+        ts = fine_start
+        while ts < current_window:
+            candle = _generate_1m_candle(price, ts)
+            fine.append(candle)
+            price = candle.close
+            ts += minute_ms
+
+        return coarse + fine
