@@ -453,9 +453,23 @@ html, body, #app {
 
 .ind-settings-footer {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
   margin-top: 16px;
+}
+
+.ind-settings-footer-spacer {
+  flex: 1;
+}
+
+.ind-settings-btn-danger {
+  border-color: var(--bear);
+  color: var(--bear);
+}
+
+.ind-settings-btn-danger:hover {
+  background: rgba(239, 83, 80, 0.12);
+  color: var(--bear);
 }
 
 .ind-settings-btn {

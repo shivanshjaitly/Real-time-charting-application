@@ -31,6 +31,7 @@ function resolveApiBase () {
 
 const WS_URL = resolveWsUrl()
 const WORKSPACE_KEY = 'chartpro:workspace'
+const DEFAULT_BAR_SPACE = 10
 
 const FALLBACK_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AAPL', 'MSFT', 'TSLA', 'GOOGL', 'AMZN', 'NVDA']
 
@@ -395,6 +396,8 @@ class IndicatorSettingsModal {
         <div class="ind-settings-body"></div>
         <p class="ind-settings-error" hidden></p>
         <div class="ind-settings-footer">
+          <button type="button" class="ind-settings-btn ind-settings-btn-danger" data-action="remove" hidden>Remove</button>
+          <span class="ind-settings-footer-spacer"></span>
           <button type="button" class="ind-settings-btn" data-action="cancel">Cancel</button>
           <button type="button" class="ind-settings-btn ind-settings-btn-primary" data-action="apply">Apply</button>
         </div>
@@ -405,11 +408,16 @@ class IndicatorSettingsModal {
     this._titleEl = this._el.querySelector('#ind-settings-title')
     this._bodyEl = this._el.querySelector('.ind-settings-body')
     this._errorEl = this._el.querySelector('.ind-settings-error')
+    this._removeBtn = this._el.querySelector('[data-action="remove"]')
 
     this._el.addEventListener('click', e => {
       const action = e.target.closest('[data-action]')?.dataset.action
       if (action === 'cancel') this.close()
       if (action === 'apply') this._apply()
+      if (action === 'remove') {
+        this._onRemove?.()
+        this.close()
+      }
     })
 
     document.addEventListener('keydown', e => {
@@ -417,7 +425,7 @@ class IndicatorSettingsModal {
     })
   }
 
-  open ({ name, calcParams, onApply }) {
+  open ({ name, calcParams, onApply, onRemove = null }) {
     const cfg = INDICATOR_CONFIGS[name]
     if (!cfg) return
 
@@ -425,6 +433,8 @@ class IndicatorSettingsModal {
     this._name = name
     this._cfg = cfg
     this._onApply = onApply
+    this._onRemove = onRemove
+    this._removeBtn.hidden = !onRemove
     this._titleEl.textContent = `${label} Settings`
     this._errorEl.hidden = true
     this._errorEl.textContent = ''
@@ -435,6 +445,8 @@ class IndicatorSettingsModal {
   close () {
     this._el.hidden = true
     this._onApply = null
+    this._onRemove = null
+    this._removeBtn.hidden = true
   }
 
   _renderBody (calcParams) {
@@ -560,6 +572,7 @@ class ChartPanel {
     this._activeIndicators = normalizeIndicatorState(indicators)
     this._closeDropdowns   = null
     this._loadGen          = 0
+    this._historyUnsubFn   = null
 
     this._render()
     this._mountChart()
@@ -666,10 +679,18 @@ class ChartPanel {
     if (this._chart) this._chart.removeOverlay()
   }
 
+  /** Cancel only this panel's pending history callback (not other panels on the same topic). */
+  _cancelPendingHistory () {
+    if (this._historyUnsubFn) {
+      this._historyUnsubFn()
+      this._historyUnsubFn = null
+    }
+  }
+
   /** Bump generation, cancel stale history, show loading overlay */
   _prepareDataTransition () {
     this._loadGen += 1
-    this._ws.cancelHistory(this._symbol, this._interval)
+    this._cancelPendingHistory()
     this._setLoading(true)
     this._clearDrawings()
     return this._loadGen
@@ -728,15 +749,20 @@ class ChartPanel {
     if (!this._chart) return
     this._el.querySelectorAll('.tool-dropdown.open').forEach(d => d.classList.remove('open'))
 
-    if (this._isIndicatorActive(name)) {
-      this._removeIndicator(name)
+    const existing = this._findIndicator(name)
+    if (existing) {
+      getIndicatorModal().open({
+        name,
+        calcParams: existing.calcParams,
+        onApply: calcParams => this._applyIndicator(name, calcParams),
+        onRemove: () => this._removeIndicator(name),
+      })
       return
     }
 
-    const existing = this._findIndicator(name)
     getIndicatorModal().open({
       name,
-      calcParams: existing?.calcParams ?? null,
+      calcParams: null,
       onApply: calcParams => this._applyIndicator(name, calcParams),
     })
   }
@@ -774,6 +800,25 @@ class ChartPanel {
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
+  }
+
+  _resetChartZoom () {
+    if (!this._chart) return
+    if (this._chart.getBarSpace().bar !== DEFAULT_BAR_SPACE) {
+      this._chart.setBarSpace(DEFAULT_BAR_SPACE)
+    }
+    this._chart.scrollToRealTime()
+  }
+
+  _bindChartViewportEvents () {
+    const viewport = this._el.querySelector('.chart-viewport')
+    if (!viewport || viewport.dataset.zoomResetBound) return
+    viewport.dataset.zoomResetBound = '1'
+    viewport.addEventListener('auxclick', e => {
+      if (e.button !== 1) return
+      e.preventDefault()
+      this._resetChartZoom()
+    })
   }
 
   // ── KlineCharts v10 — setDataLoader integration ───────────────────────────
@@ -822,11 +867,13 @@ class ChartPanel {
         const loadGen = self._loadGen
         self._setLoading(true)
 
-        self._ws.onHistory(ticker, intervalKey, (candles) => {
+        self._cancelPendingHistory()
+        self._historyUnsubFn = self._ws.onHistory(ticker, intervalKey, (candles) => {
           if (loadGen !== self._loadGen) {
             self._setLoading(false)
             return
           }
+          self._historyUnsubFn = null
           self._setLoading(false)
           callback(candles, { forward: true, backward: false })
           self._applyActiveIndicators()
@@ -851,6 +898,7 @@ class ChartPanel {
     })
 
     this._syncIndicatorButtons()
+    this._bindChartViewportEvents()
   }
 
   // ── Controls ─────────────────────────────────────────────────────────────────
@@ -860,9 +908,8 @@ class ChartPanel {
     const savedIndicators = this._activeIndicators.map(({ name, calcParams }) => ({ name, calcParams: [...calcParams] }))
 
     if (this._chart) {
-      this._ws.unsubscribe(this._symbol, this._interval)
-      if (this._unsubFn) { this._unsubFn(); this._unsubFn = null }
-      this._ws.cancelHistory(this._symbol, this._interval)
+      this._teardownChartSubscription()
+      this._cancelPendingHistory()
       dispose(this._chart)
       this._chart = null
     }
@@ -909,7 +956,7 @@ class ChartPanel {
 
   destroy () {
     this._teardownChartSubscription()
-    this._ws.cancelHistory(this._symbol, this._interval)
+    this._cancelPendingHistory()
     this._setLoading(false)
     if (this._chart) { dispose(this._chart); this._chart = null }
     if (this._closeDropdowns) { document.removeEventListener('click', this._closeDropdowns); this._closeDropdowns = null }
@@ -950,6 +997,9 @@ class App {
   }
 
   _applyLayout (layout, states = null) {
+    const preserved = states ?? this._panels.map(p => p.getState())
+    const primary = preserved[0] ?? { symbol: 'BTCUSDT', interval: '1m', indicators: [] }
+
     this._panels.forEach(p => p.destroy())
     this._panels = []
 
@@ -960,33 +1010,12 @@ class App {
     const LAYOUT_COUNT = { '1x1': 1, '1x2': 2, '2x1': 2, '2x2': 4, '2x3': 6, '3x1': 3, '3x3': 9, '4x4': 16 }
     const count = LAYOUT_COUNT[layout] ?? 1
 
-    const defaults = [
-      { symbol: 'BTCUSDT', interval: '1m'  },
-      { symbol: 'ETHUSDT', interval: '5m'  },
-      { symbol: 'BTCUSDT', interval: '1h'  },
-      { symbol: 'AAPL',    interval: '1d'  },
-      { symbol: 'SOLUSDT', interval: '15m' },
-      { symbol: 'MSFT',    interval: '1d'  },
-      { symbol: 'BNBUSDT', interval: '1m'  },
-      { symbol: 'TSLA',    interval: '5m'  },
-      { symbol: 'GOOGL',   interval: '1h'  },
-      { symbol: 'AMZN',    interval: '15m' },
-      { symbol: 'NVDA',    interval: '1d'  },
-      { symbol: 'ETHUSDT', interval: '1h'  },
-      { symbol: 'SOLUSDT', interval: '1d'  },
-      { symbol: 'BTCUSDT', interval: '5m'  },
-      { symbol: 'MSFT',    interval: '15m' },
-      { symbol: 'TSLA',    interval: '1h'  },
-      { symbol: 'GOOGL',   interval: '1d'  },
-      { symbol: 'AMZN',    interval: '1h'  },
-    ]
-
     for (let i = 0; i < count; i++) {
       const panelEl = document.createElement('div')
       panelEl.className = 'chart-panel'
       this._grid.appendChild(panelEl)
 
-      const st = (states && states[i]) ? states[i] : defaults[i]
+      const st = preserved[i] ?? primary
       const symbol = this._symbols.includes(st.symbol) ? st.symbol : this._symbols[0]
       this._panels.push(new ChartPanel(panelEl, this._ws, this._symbols, this._timezone, symbol, st.interval, st.indicators))
     }
