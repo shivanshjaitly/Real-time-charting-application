@@ -144,6 +144,7 @@ class WSManager {
     this._queue            = []
     this._candleHandlers   = {}           // topic → Set<fn>
     this._historyHandlers  = {}           // topic → Set<fn> (one-shot per reconnect batch)
+    this._historyCache     = {}           // topic → last history payload (shared across panels)
     this._subRefCount      = {}           // topic → refcount for shared subscriptions
     this._reconnectCbs     = []
     this._reconnectTimer   = null
@@ -184,6 +185,7 @@ class WSManager {
       this._setStatus('connected')
       while (this._queue.length) this._ws.send(this._queue.shift())
       if (this._hadConnection) {
+        this._historyCache = {}
         this._reconnectCbs.forEach(fn => fn())
         this._resubscribeAll()
       }
@@ -194,11 +196,7 @@ class WSManager {
       let msg; try { msg = JSON.parse(data) } catch { return }
       const topic = this._topic(msg.symbol, msg.interval)
       if (msg.type === 'history') {
-        const handlers = this._historyHandlers[topic]
-        if (handlers) {
-          handlers.forEach(fn => fn(msg.data || []))
-          delete this._historyHandlers[topic]
-        }
+        this._deliverHistory(topic, msg.data || [])
       } else if (msg.type === 'candle') {
         const handlers = this._candleHandlers[topic]
         if (handlers) handlers.forEach(fn => fn(msg.data))
@@ -233,11 +231,28 @@ class WSManager {
     }
   }
 
+  _deliverHistory (topic, data) {
+    this._historyCache[topic] = data
+    const handlers = this._historyHandlers[topic]
+    if (!handlers) return
+    handlers.forEach(fn => fn(data))
+    delete this._historyHandlers[topic]
+  }
+
   /** Register a one-shot history callback for symbol:interval */
   onHistory (symbol, interval, fn) {
     const topic = this._topic(symbol, interval)
     if (!this._historyHandlers[topic]) this._historyHandlers[topic] = new Set()
     this._historyHandlers[topic].add(fn)
+    if (Object.prototype.hasOwnProperty.call(this._historyCache, topic)) {
+      const cached = this._historyCache[topic]
+      queueMicrotask(() => {
+        if (!this._historyHandlers[topic]?.has(fn)) return
+        fn(cached)
+        this._historyHandlers[topic].delete(fn)
+        if (this._historyHandlers[topic].size === 0) delete this._historyHandlers[topic]
+      })
+    }
     return () => { this._historyHandlers[topic]?.delete(fn) }
   }
 
@@ -266,9 +281,13 @@ class WSManager {
 
   subscribe (symbol, interval) {
     const topic = this._topic(symbol, interval)
-    this._subRefCount[topic] = (this._subRefCount[topic] || 0) + 1
-    if (this._subRefCount[topic] === 1) {
+    const prev = this._subRefCount[topic] || 0
+    this._subRefCount[topic] = prev + 1
+    if (prev === 0) {
       this._send({ type: 'subscribe', symbol, interval })
+    } else if (this._historyHandlers[topic]?.size > 0) {
+      // Topic already active — fetch history for additional panel(s)
+      this._send({ type: 'history', symbol, interval })
     }
   }
 
@@ -531,7 +550,10 @@ class ChartPanel {
         self._setLoading(true)
 
         self._ws.onHistory(ticker, intervalKey, (candles) => {
-          if (loadGen !== self._loadGen) return
+          if (loadGen !== self._loadGen) {
+            self._setLoading(false)
+            return
+          }
           self._setLoading(false)
           callback(candles, { forward: true, backward: false })
           self._applyActiveIndicators()

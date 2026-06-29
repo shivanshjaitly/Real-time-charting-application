@@ -46,8 +46,8 @@ HISTORY_COUNTS: dict[Interval, int] = {
     Interval.ONE_MINUTE:       200,
     Interval.FIVE_MINUTES:     200,
     Interval.FIFTEEN_MINUTES:  200,
-    Interval.ONE_HOUR:         240,   # 10 days at default seed depth
-    Interval.ONE_DAY:           10,
+    Interval.ONE_HOUR:         720,   # 30 days at default seed depth
+    Interval.ONE_DAY:          365,   # ~1 year at default seed depth
 }
 
 
