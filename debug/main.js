@@ -68,6 +68,8 @@ const INDICATORS = [
   { key: 'CCI',  label: 'CCI'  },
 ]
 
+const OVERLAY_INDICATORS = new Set(['MA', 'EMA', 'BOLL'])
+
 const OVERLAYS = [
   { key: 'straightLine',           label: 'Trend Line'  },
   { key: 'horizontalStraightLine', label: 'Horizontal'  },
@@ -204,7 +206,7 @@ class WSManager {
 // ─── Chart Panel ──────────────────────────────────────────────────────────────
 
 class ChartPanel {
-  constructor (panelEl, wsManager, symbols, symbol = 'BTCUSDT', interval = '1m') {
+  constructor (panelEl, wsManager, symbols, symbol = 'BTCUSDT', interval = '1m', indicators = []) {
     this._el               = panelEl
     this._ws               = wsManager
     this._symbols          = symbols
@@ -212,7 +214,7 @@ class ChartPanel {
     this._interval         = interval
     this._chart            = null
     this._unsubFn          = null
-    this._activeIndicators = new Set()
+    this._activeIndicators = new Set(Array.isArray(indicators) ? indicators : [])
     this._closeDropdowns   = null
 
     this._render()
@@ -223,6 +225,12 @@ class ChartPanel {
 
   _render () {
     if (this._closeDropdowns) document.removeEventListener('click', this._closeDropdowns)
+
+    if (this._chart) {
+      this._teardownChartSubscription()
+      dispose(this._chart)
+      this._chart = null
+    }
 
     this._el.innerHTML = `
       <div class="panel-toolbar">
@@ -287,6 +295,8 @@ class ChartPanel {
     // Close any open dropdown on outside click
     this._closeDropdowns = () => this._el.querySelectorAll('.tool-dropdown.open').forEach(d => d.classList.remove('open'))
     document.addEventListener('click', this._closeDropdowns)
+
+    this._syncIndicatorButtons()
   }
 
   _updatePeriodButtons () {
@@ -295,23 +305,54 @@ class ChartPanel {
     )
   }
 
+  _createIndicatorOnChart (name) {
+    if (OVERLAY_INDICATORS.has(name)) {
+      this._chart.createIndicator(name, { isStack: true, pane: { id: 'candle_pane' } })
+    } else {
+      this._chart.createIndicator(name)
+    }
+  }
+
+  _teardownChartSubscription () {
+    this._ws.unsubscribe(this._symbol, this._interval)
+    if (this._unsubFn) { this._unsubFn(); this._unsubFn = null }
+  }
+
+  _rebuildActiveIndicators () {
+    if (!this._chart || this._activeIndicators.size === 0) return
+    for (const name of [...this._activeIndicators]) {
+      this._chart.removeIndicator({ name })
+    }
+    const ordered = [...this._activeIndicators].sort((a, b) => {
+      const ao = OVERLAY_INDICATORS.has(a)
+      const bo = OVERLAY_INDICATORS.has(b)
+      if (ao === bo) return 0
+      return ao ? -1 : 1
+    })
+    for (const name of ordered) this._createIndicatorOnChart(name)
+    this._syncIndicatorButtons()
+  }
+
+  _syncIndicatorButtons () {
+    this._el.querySelectorAll('[data-ind]').forEach(btn =>
+      btn.classList.toggle('active', this._activeIndicators.has(btn.dataset.ind))
+    )
+  }
+
+  _applyActiveIndicators () {
+    queueMicrotask(() => this._rebuildActiveIndicators())
+  }
+
   _toggleIndicator (name) {
     if (!this._chart) return
-    const overlay = name === 'MA' || name === 'EMA' || name === 'BOLL'
     if (this._activeIndicators.has(name)) {
       this._chart.removeIndicator({ name })
       this._activeIndicators.delete(name)
     } else {
-      if (overlay) {
-        this._chart.createIndicator(name, { isStack: true, pane: { id: 'candle_pane' } })
-      } else {
-        this._chart.createIndicator(name)
-      }
+      this._createIndicatorOnChart(name)
       this._activeIndicators.add(name)
     }
-    this._el.querySelectorAll('[data-ind]').forEach(btn =>
-      btn.classList.toggle('active', this._activeIndicators.has(btn.dataset.ind))
-    )
+    this._syncIndicatorButtons()
   }
 
   _startDrawing (overlayKey) {
@@ -334,10 +375,11 @@ class ChartPanel {
   _mountChart () {
     const canvas = this._el.querySelector('.chart-canvas')
 
-    // Dispose previous instance if any
-    if (this._chart) { dispose(canvas); this._chart = null }
-    if (this._unsubFn) { this._unsubFn(); this._unsubFn = null }
-    this._activeIndicators.clear()
+    if (this._chart) {
+      this._teardownChartSubscription()
+      dispose(this._chart)
+      this._chart = null
+    }
 
     this._chart = init(canvas, {
       layout: {
@@ -349,62 +391,72 @@ class ChartPanel {
     })
 
     this._chart.setStyles(KLINE_STYLES)
+
+    const periodCfg = PERIODS.find(p => p.key === this._interval) || PERIODS[0]
+    const self     = this
+
     this._chart.setSymbol({
       ticker:          this._symbol,
       pricePrecision:  2,
       volumePrecision: 0,
     })
-
-    const periodCfg = PERIODS.find(p => p.key === this._interval) || PERIODS[0]
-
-    // setDataLoader is the KlineCharts v10 idiomatic way to supply data.
-    // getBars     → called by the chart to load history (init/forward/backward)
-    // subscribeBar → called by the chart when it wants live updates
-    // unsubscribeBar → called when chart disposes or period changes
-    const symbol   = this._symbol
-    const self     = this
+    this._chart.setPeriod(periodCfg.period)
 
     this._chart.setDataLoader({
-      getBars: ({ type, period, callback }) => {
+      getBars: ({ type, period, symbol, callback }) => {
         if (type !== 'init') {
           // forward/backward paging — we don't support infinite scroll yet
           callback([], { forward: true, backward: true })
           return
         }
         const intervalKey = periodToKey(period)
-        // Register history handler before subscribing
-        self._ws.onHistory(symbol, intervalKey, (candles) => {
+        const ticker = symbol.ticker
+        self._ws.onHistory(ticker, intervalKey, (candles) => {
           callback(candles, { forward: true, backward: false })
+          self._applyActiveIndicators()
         })
-        // Subscribe sends history + starts live stream
-        self._ws.subscribe(symbol, intervalKey)
+        self._ws.subscribe(ticker, intervalKey)
       },
 
-      subscribeBar: ({ period, callback }) => {
+      subscribeBar: ({ period, symbol, callback }) => {
         const intervalKey = periodToKey(period)
+        const ticker = symbol.ticker
         self._interval = intervalKey
-        // Register live candle handler — callback(candle, isPartial=true)
-        self._unsubFn = self._ws.onCandle(symbol, intervalKey, (candle) => {
+        self._unsubFn = self._ws.onCandle(ticker, intervalKey, (candle) => {
           callback(candle, true)
         })
       },
 
-      unsubscribeBar: ({ period }) => {
+      unsubscribeBar: ({ period, symbol }) => {
         const intervalKey = periodToKey(period)
-        self._ws.unsubscribe(symbol, intervalKey)
+        self._ws.unsubscribe(symbol.ticker, intervalKey)
         if (self._unsubFn) { self._unsubFn(); self._unsubFn = null }
       },
     })
 
-    this._chart.setPeriod(periodCfg.period)
+    this._syncIndicatorButtons()
   }
 
   // ── Controls ─────────────────────────────────────────────────────────────────
 
   _changeSymbol (symbol) {
     if (symbol === this._symbol) return
+    const savedIndicators = [...this._activeIndicators]
+
+    if (this._chart) {
+      this._ws.unsubscribe(this._symbol, this._interval)
+      if (this._unsubFn) { this._unsubFn(); this._unsubFn = null }
+      dispose(this._chart)
+      this._chart = null
+    }
+
     this._symbol = symbol
-    this._render()
+
+    const select = this._el.querySelector('.symbol-select')
+    if (select) select.value = symbol
+
+    this._activeIndicators = new Set(savedIndicators)
+    this._syncIndicatorButtons()
     this._mountChart()
   }
 
@@ -422,12 +474,17 @@ class ChartPanel {
 
   // ── Workspace ────────────────────────────────────────────────────────────────
 
-  getState () { return { symbol: this._symbol, interval: this._interval } }
+  getState () {
+    return {
+      symbol:     this._symbol,
+      interval:   this._interval,
+      indicators: [...this._activeIndicators],
+    }
+  }
 
   destroy () {
-    if (this._unsubFn) { this._unsubFn(); this._unsubFn = null }
-    const canvas = this._el.querySelector('.chart-canvas')
-    if (canvas && this._chart) { dispose(canvas); this._chart = null }
+    this._teardownChartSubscription()
+    if (this._chart) { dispose(this._chart); this._chart = null }
     if (this._closeDropdowns) { document.removeEventListener('click', this._closeDropdowns); this._closeDropdowns = null }
   }
 }
@@ -497,7 +554,7 @@ class App {
 
       const st = (states && states[i]) ? states[i] : defaults[i]
       const symbol = this._symbols.includes(st.symbol) ? st.symbol : this._symbols[0]
-      this._panels.push(new ChartPanel(panelEl, this._ws, this._symbols, symbol, st.interval))
+      this._panels.push(new ChartPanel(panelEl, this._ws, this._symbols, symbol, st.interval, st.indicators))
     }
   }
 
