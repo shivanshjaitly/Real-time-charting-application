@@ -84,6 +84,75 @@ const INDICATORS = [
   { key: 'CCI',  label: 'CCI'  },
 ]
 
+/** Default params and settings schema per indicator (matches KlineCharts built-ins). */
+const INDICATOR_CONFIGS = {
+  MA: {
+    type: 'periods',
+    defaultParams: [5, 10, 30, 60],
+    presetPeriods: [5, 10, 20, 30, 60, 120, 200],
+  },
+  EMA: {
+    type: 'periods',
+    defaultParams: [6, 12, 20],
+    presetPeriods: [6, 9, 12, 20, 26, 50, 100, 200],
+  },
+  BOLL: {
+    type: 'fields',
+    defaultParams: [20, 2],
+    fields: [
+      { label: 'Period', min: 1, max: 500, step: 1 },
+      { label: 'Std Dev', min: 0.1, max: 10, step: 0.1 },
+    ],
+  },
+  MACD: {
+    type: 'fields',
+    defaultParams: [12, 26, 9],
+    fields: [
+      { label: 'Fast EMA', min: 1, max: 500, step: 1 },
+      { label: 'Slow EMA', min: 1, max: 500, step: 1 },
+      { label: 'Signal', min: 1, max: 500, step: 1 },
+    ],
+  },
+  RSI: {
+    type: 'periods',
+    defaultParams: [6, 12, 24],
+    presetPeriods: [6, 9, 12, 14, 24, 28],
+  },
+  KDJ: {
+    type: 'fields',
+    defaultParams: [9, 3, 3],
+    fields: [
+      { label: 'K Period', min: 1, max: 500, step: 1 },
+      { label: 'D Period', min: 1, max: 500, step: 1 },
+      { label: 'J Period', min: 1, max: 500, step: 1 },
+    ],
+  },
+  CCI: {
+    type: 'fields',
+    defaultParams: [20],
+    fields: [
+      { label: 'Period', min: 1, max: 500, step: 1 },
+    ],
+  },
+}
+
+function normalizeIndicatorState (indicators) {
+  if (!Array.isArray(indicators)) return []
+  return indicators.map(item => {
+    if (typeof item === 'string') {
+      const cfg = INDICATOR_CONFIGS[item]
+      return { name: item, calcParams: cfg ? [...cfg.defaultParams] : [] }
+    }
+    const cfg = INDICATOR_CONFIGS[item.name]
+    return {
+      name: item.name,
+      calcParams: Array.isArray(item.calcParams)
+        ? [...item.calcParams]
+        : (cfg ? [...cfg.defaultParams] : []),
+    }
+  }).filter(item => INDICATOR_CONFIGS[item.name])
+}
+
 const OVERLAY_INDICATORS = new Set(['MA', 'EMA', 'BOLL'])
 
 const OVERLAYS = [
@@ -308,6 +377,174 @@ class WSManager {
   }
 }
 
+// ─── Indicator Settings Modal ─────────────────────────────────────────────────
+
+class IndicatorSettingsModal {
+  constructor () {
+    this._onApply = null
+    this._el = document.createElement('div')
+    this._el.className = 'ind-settings-modal'
+    this._el.hidden = true
+    this._el.innerHTML = `
+      <div class="ind-settings-backdrop" data-action="cancel"></div>
+      <div class="ind-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="ind-settings-title">
+        <div class="ind-settings-header">
+          <h3 id="ind-settings-title"></h3>
+          <button type="button" class="ind-settings-close" data-action="cancel" aria-label="Close">×</button>
+        </div>
+        <div class="ind-settings-body"></div>
+        <p class="ind-settings-error" hidden></p>
+        <div class="ind-settings-footer">
+          <button type="button" class="ind-settings-btn" data-action="cancel">Cancel</button>
+          <button type="button" class="ind-settings-btn ind-settings-btn-primary" data-action="apply">Apply</button>
+        </div>
+      </div>
+    `
+    document.body.appendChild(this._el)
+
+    this._titleEl = this._el.querySelector('#ind-settings-title')
+    this._bodyEl = this._el.querySelector('.ind-settings-body')
+    this._errorEl = this._el.querySelector('.ind-settings-error')
+
+    this._el.addEventListener('click', e => {
+      const action = e.target.closest('[data-action]')?.dataset.action
+      if (action === 'cancel') this.close()
+      if (action === 'apply') this._apply()
+    })
+
+    document.addEventListener('keydown', e => {
+      if (!this._el.hidden && e.key === 'Escape') this.close()
+    })
+  }
+
+  open ({ name, calcParams, onApply }) {
+    const cfg = INDICATOR_CONFIGS[name]
+    if (!cfg) return
+
+    const label = INDICATORS.find(i => i.key === name)?.label ?? name
+    this._name = name
+    this._cfg = cfg
+    this._onApply = onApply
+    this._titleEl.textContent = `${label} Settings`
+    this._errorEl.hidden = true
+    this._errorEl.textContent = ''
+    this._renderBody(calcParams)
+    this._el.hidden = false
+  }
+
+  close () {
+    this._el.hidden = true
+    this._onApply = null
+  }
+
+  _renderBody (calcParams) {
+    const cfg = this._cfg
+    const active = new Set(Array.isArray(calcParams) ? calcParams : [])
+
+    if (cfg.type === 'periods') {
+      const presets = cfg.presetPeriods || cfg.defaultParams
+      this._bodyEl.innerHTML = `
+        <p class="ind-settings-hint">Select the periods you want — only checked values will be drawn.</p>
+        <div class="ind-settings-presets">
+          ${presets.map(p => `
+            <label class="ind-settings-check">
+              <input type="checkbox" value="${p}"${active.has(p) ? ' checked' : ''} />
+              <span>${p}</span>
+            </label>
+          `).join('')}
+        </div>
+        <label class="ind-settings-field">
+          <span>Custom periods (comma-separated)</span>
+          <input type="text" class="ind-settings-custom" placeholder="e.g. 9, 21, 55" />
+        </label>
+      `
+      return
+    }
+
+    this._bodyEl.innerHTML = `
+      <p class="ind-settings-hint">Adjust the parameters, then click Apply.</p>
+      <div class="ind-settings-fields">
+        ${cfg.fields.map((field, i) => `
+          <label class="ind-settings-field">
+            <span>${field.label}</span>
+            <input
+              type="number"
+              data-field="${i}"
+              min="${field.min}"
+              max="${field.max}"
+              step="${field.step}"
+              value="${(calcParams ?? cfg.defaultParams)[i] ?? cfg.defaultParams[i]}"
+            />
+          </label>
+        `).join('')}
+      </div>
+    `
+  }
+
+  _parsePeriods () {
+    const cfg = this._cfg
+    const periods = new Set()
+
+    this._bodyEl.querySelectorAll('.ind-settings-presets input:checked').forEach(input => {
+      periods.add(Number(input.value))
+    })
+
+    const custom = this._bodyEl.querySelector('.ind-settings-custom')?.value ?? ''
+    custom.split(/[,;\s]+/).forEach(part => {
+      const n = Number(part.trim())
+      if (Number.isFinite(n) && n > 0) periods.add(Math.round(n))
+    })
+
+    return [...periods].sort((a, b) => a - b)
+  }
+
+  _parseFields () {
+    const cfg = this._cfg
+    const values = []
+    for (let i = 0; i < cfg.fields.length; i++) {
+      const input = this._bodyEl.querySelector(`input[data-field="${i}"]`)
+      const field = cfg.fields[i]
+      const n = Number(input?.value)
+      if (!Number.isFinite(n) || n < field.min || n > field.max) {
+        return { error: `${field.label} must be between ${field.min} and ${field.max}.` }
+      }
+      values.push(field.step >= 1 ? Math.round(n) : n)
+    }
+    return { values }
+  }
+
+  _apply () {
+    const cfg = this._cfg
+    let calcParams
+
+    if (cfg.type === 'periods') {
+      calcParams = this._parsePeriods()
+      if (calcParams.length === 0) {
+        this._errorEl.textContent = 'Select at least one period.'
+        this._errorEl.hidden = false
+        return
+      }
+    } else {
+      const parsed = this._parseFields()
+      if (parsed.error) {
+        this._errorEl.textContent = parsed.error
+        this._errorEl.hidden = false
+        return
+      }
+      calcParams = parsed.values
+    }
+
+    this._onApply?.(calcParams)
+    this.close()
+  }
+}
+
+let _indicatorModal = null
+function getIndicatorModal () {
+  if (!_indicatorModal) _indicatorModal = new IndicatorSettingsModal()
+  return _indicatorModal
+}
+
 // ─── Chart Panel ──────────────────────────────────────────────────────────────
 
 class ChartPanel {
@@ -320,7 +557,7 @@ class ChartPanel {
     this._interval         = interval
     this._chart            = null
     this._unsubFn          = null
-    this._activeIndicators = new Set(Array.isArray(indicators) ? indicators : [])
+    this._activeIndicators = normalizeIndicatorState(indicators)
     this._closeDropdowns   = null
     this._loadGen          = 0
 
@@ -390,9 +627,9 @@ class ChartPanel {
       })
     })
 
-    // Indicator toggle
+    // Indicator — open settings when adding, click again to remove
     this._el.querySelectorAll('[data-ind]').forEach(btn =>
-      btn.addEventListener('click', e => { e.stopPropagation(); this._toggleIndicator(btn.dataset.ind) })
+      btn.addEventListener('click', e => { e.stopPropagation(); this._onIndicatorClick(btn.dataset.ind) })
     )
 
     // Drawing tool selection
@@ -438,12 +675,20 @@ class ChartPanel {
     return this._loadGen
   }
 
-  _createIndicatorOnChart (name) {
+  _createIndicatorOnChart ({ name, calcParams }) {
+    const payload = { name, calcParams }
     if (OVERLAY_INDICATORS.has(name)) {
-      this._chart.createIndicator(name, { isStack: true, pane: { id: 'candle_pane' } })
-    } else {
-      this._chart.createIndicator(name)
+      return this._chart.createIndicator(payload, { isStack: true, pane: { id: 'candle_pane' } })
     }
+    return this._chart.createIndicator(payload)
+  }
+
+  _isIndicatorActive (name) {
+    return this._activeIndicators.some(ind => ind.name === name)
+  }
+
+  _findIndicator (name) {
+    return this._activeIndicators.find(ind => ind.name === name)
   }
 
   _teardownChartSubscription () {
@@ -452,23 +697,26 @@ class ChartPanel {
   }
 
   _rebuildActiveIndicators () {
-    if (!this._chart || this._activeIndicators.size === 0) return
-    for (const name of [...this._activeIndicators]) {
-      this._chart.removeIndicator({ name })
+    if (!this._chart || this._activeIndicators.length === 0) return
+    for (const ind of [...this._activeIndicators]) {
+      this._chart.removeIndicator({ name: ind.name, id: ind.id })
     }
     const ordered = [...this._activeIndicators].sort((a, b) => {
-      const ao = OVERLAY_INDICATORS.has(a)
-      const bo = OVERLAY_INDICATORS.has(b)
+      const ao = OVERLAY_INDICATORS.has(a.name)
+      const bo = OVERLAY_INDICATORS.has(b.name)
       if (ao === bo) return 0
       return ao ? -1 : 1
     })
-    for (const name of ordered) this._createIndicatorOnChart(name)
+    this._activeIndicators = ordered.map(ind => {
+      const id = this._createIndicatorOnChart(ind)
+      return { ...ind, id }
+    })
     this._syncIndicatorButtons()
   }
 
   _syncIndicatorButtons () {
     this._el.querySelectorAll('[data-ind]').forEach(btn =>
-      btn.classList.toggle('active', this._activeIndicators.has(btn.dataset.ind))
+      btn.classList.toggle('active', this._isIndicatorActive(btn.dataset.ind))
     )
   }
 
@@ -476,15 +724,40 @@ class ChartPanel {
     queueMicrotask(() => this._rebuildActiveIndicators())
   }
 
-  _toggleIndicator (name) {
+  _onIndicatorClick (name) {
     if (!this._chart) return
-    if (this._activeIndicators.has(name)) {
-      this._chart.removeIndicator({ name })
-      this._activeIndicators.delete(name)
-    } else {
-      this._createIndicatorOnChart(name)
-      this._activeIndicators.add(name)
+    this._el.querySelectorAll('.tool-dropdown.open').forEach(d => d.classList.remove('open'))
+
+    if (this._isIndicatorActive(name)) {
+      this._removeIndicator(name)
+      return
     }
+
+    const existing = this._findIndicator(name)
+    getIndicatorModal().open({
+      name,
+      calcParams: existing?.calcParams ?? null,
+      onApply: calcParams => this._applyIndicator(name, calcParams),
+    })
+  }
+
+  _applyIndicator (name, calcParams) {
+    const existing = this._findIndicator(name)
+    if (existing) {
+      this._chart.removeIndicator({ name: existing.name, id: existing.id })
+      this._activeIndicators = this._activeIndicators.filter(ind => ind.name !== name)
+    }
+
+    const id = this._createIndicatorOnChart({ name, calcParams })
+    this._activeIndicators.push({ name, calcParams, id })
+    this._syncIndicatorButtons()
+  }
+
+  _removeIndicator (name) {
+    const ind = this._findIndicator(name)
+    if (!ind) return
+    this._chart.removeIndicator({ name: ind.name, id: ind.id })
+    this._activeIndicators = this._activeIndicators.filter(i => i.name !== name)
     this._syncIndicatorButtons()
   }
 
@@ -584,7 +857,7 @@ class ChartPanel {
 
   _changeSymbol (symbol) {
     if (symbol === this._symbol) return
-    const savedIndicators = [...this._activeIndicators]
+    const savedIndicators = this._activeIndicators.map(({ name, calcParams }) => ({ name, calcParams: [...calcParams] }))
 
     if (this._chart) {
       this._ws.unsubscribe(this._symbol, this._interval)
@@ -599,7 +872,7 @@ class ChartPanel {
     const select = this._el.querySelector('.symbol-select')
     if (select) select.value = symbol
 
-    this._activeIndicators = new Set(savedIndicators)
+    this._activeIndicators = normalizeIndicatorState(savedIndicators)
     this._syncIndicatorButtons()
     this._mountChart()
   }
@@ -630,7 +903,7 @@ class ChartPanel {
     return {
       symbol:     this._symbol,
       interval:   this._interval,
-      indicators: [...this._activeIndicators],
+      indicators: this._activeIndicators.map(({ name, calcParams }) => ({ name, calcParams: [...calcParams] })),
     }
   }
 
