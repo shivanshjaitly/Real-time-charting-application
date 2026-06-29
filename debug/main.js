@@ -83,6 +83,7 @@ const INDICATORS = [
   { key: 'RSI',  label: 'RSI'  },
   { key: 'KDJ',  label: 'KDJ'  },
   { key: 'CCI',  label: 'CCI'  },
+  { key: 'VOL',  label: 'Vol MA' },
 ]
 
 /** Default params and settings schema per indicator (matches KlineCharts built-ins). */
@@ -135,6 +136,12 @@ const INDICATOR_CONFIGS = {
       { label: 'Period', min: 1, max: 500, step: 1 },
     ],
   },
+  VOL: {
+    type: 'periods',
+    defaultParams: [],
+    presetPeriods: [5, 10, 20, 30, 60, 120],
+    hint: 'Select volume MA periods to draw on the volume panel. Volume bars are always shown.',
+  },
 }
 
 function normalizeIndicatorState (indicators) {
@@ -151,7 +158,7 @@ function normalizeIndicatorState (indicators) {
         ? [...item.calcParams]
         : (cfg ? [...cfg.defaultParams] : []),
     }
-  }).filter(item => INDICATOR_CONFIGS[item.name])
+  }).filter(item => INDICATOR_CONFIGS[item.name] && item.name !== 'VOL')
 }
 
 const OVERLAY_INDICATORS = new Set(['MA', 'EMA', 'BOLL'])
@@ -455,8 +462,9 @@ class IndicatorSettingsModal {
 
     if (cfg.type === 'periods') {
       const presets = cfg.presetPeriods || cfg.defaultParams
+      const hint = cfg.hint ?? 'Select the periods you want — only checked values will be drawn.'
       this._bodyEl.innerHTML = `
-        <p class="ind-settings-hint">Select the periods you want — only checked values will be drawn.</p>
+        <p class="ind-settings-hint">${hint}</p>
         <div class="ind-settings-presets">
           ${presets.map(p => `
             <label class="ind-settings-check">
@@ -560,7 +568,7 @@ function getIndicatorModal () {
 // ─── Chart Panel ──────────────────────────────────────────────────────────────
 
 class ChartPanel {
-  constructor (panelEl, wsManager, symbols, timezone, symbol = 'BTCUSDT', interval = '1m', indicators = []) {
+  constructor (panelEl, wsManager, symbols, timezone, symbol = 'BTCUSDT', interval = '1m', indicators = [], volCalcParams = []) {
     this._el               = panelEl
     this._ws               = wsManager
     this._symbols          = symbols
@@ -570,6 +578,7 @@ class ChartPanel {
     this._chart            = null
     this._unsubFn          = null
     this._activeIndicators = normalizeIndicatorState(indicators)
+    this._volCalcParams    = Array.isArray(volCalcParams) ? [...volCalcParams] : []
     this._closeDropdowns   = null
     this._loadGen          = 0
     this._historyUnsubFn   = null
@@ -736,9 +745,13 @@ class ChartPanel {
   }
 
   _syncIndicatorButtons () {
-    this._el.querySelectorAll('[data-ind]').forEach(btn =>
-      btn.classList.toggle('active', this._isIndicatorActive(btn.dataset.ind))
-    )
+    this._el.querySelectorAll('[data-ind]').forEach(btn => {
+      const name = btn.dataset.ind
+      const active = name === 'VOL'
+        ? this._volCalcParams.length > 0
+        : this._isIndicatorActive(name)
+      btn.classList.toggle('active', active)
+    })
   }
 
   _applyActiveIndicators () {
@@ -748,6 +761,18 @@ class ChartPanel {
   _onIndicatorClick (name) {
     if (!this._chart) return
     this._el.querySelectorAll('.tool-dropdown.open').forEach(d => d.classList.remove('open'))
+
+    if (name === 'VOL') {
+      getIndicatorModal().open({
+        name,
+        calcParams: this._volCalcParams.length ? this._volCalcParams : null,
+        onApply: calcParams => this._applyVolCalcParams(calcParams),
+        onRemove: this._volCalcParams.length
+          ? () => this._applyVolCalcParams([])
+          : null,
+      })
+      return
+    }
 
     const existing = this._findIndicator(name)
     if (existing) {
@@ -784,6 +809,12 @@ class ChartPanel {
     if (!ind) return
     this._chart.removeIndicator({ name: ind.name, id: ind.id })
     this._activeIndicators = this._activeIndicators.filter(i => i.name !== name)
+    this._syncIndicatorButtons()
+  }
+
+  _applyVolCalcParams (calcParams) {
+    this._volCalcParams = [...calcParams]
+    this._chart.overrideIndicator({ name: 'VOL', calcParams: this._volCalcParams })
     this._syncIndicatorButtons()
   }
 
@@ -851,7 +882,7 @@ class ChartPanel {
       layout: {
         panes: [
           { type: 'candle' },
-          { type: 'indicator', content: ['VOL'] },
+          { type: 'indicator', content: [{ name: 'VOL', calcParams: [...this._volCalcParams] }] },
         ],
       },
       timezone: this._timezone,
@@ -921,6 +952,7 @@ class ChartPanel {
   _changeSymbol (symbol) {
     if (symbol === this._symbol) return
     const savedIndicators = this._activeIndicators.map(({ name, calcParams }) => ({ name, calcParams: [...calcParams] }))
+    const savedVolCalcParams = [...this._volCalcParams]
 
     if (this._chart) {
       this._teardownChartSubscription()
@@ -935,6 +967,7 @@ class ChartPanel {
     if (select) select.value = symbol
 
     this._activeIndicators = normalizeIndicatorState(savedIndicators)
+    this._volCalcParams = savedVolCalcParams
     this._syncIndicatorButtons()
     this._mountChart()
   }
@@ -963,9 +996,10 @@ class ChartPanel {
 
   getState () {
     return {
-      symbol:     this._symbol,
-      interval:   this._interval,
-      indicators: this._activeIndicators.map(({ name, calcParams }) => ({ name, calcParams: [...calcParams] })),
+      symbol:        this._symbol,
+      interval:      this._interval,
+      indicators:    this._activeIndicators.map(({ name, calcParams }) => ({ name, calcParams: [...calcParams] })),
+      volCalcParams: [...this._volCalcParams],
     }
   }
 
@@ -1032,7 +1066,7 @@ class App {
 
       const st = preserved[i] ?? primary
       const symbol = this._symbols.includes(st.symbol) ? st.symbol : this._symbols[0]
-      this._panels.push(new ChartPanel(panelEl, this._ws, this._symbols, this._timezone, symbol, st.interval, st.indicators))
+      this._panels.push(new ChartPanel(panelEl, this._ws, this._symbols, this._timezone, symbol, st.interval, st.indicators, st.volCalcParams ?? []))
     }
   }
 
