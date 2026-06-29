@@ -1,73 +1,75 @@
 """
 Aggregation Engine
 
-Derives 5m, 15m, 1h, 1d candles from 1-minute data ONLY.
+Maintains open (in-progress) candles for every interval (1m, 5m, 15m, 1h, 1d).
+
+Each price tick updates the current window in place. When the wall-clock
+window changes, a new candle opens automatically on the next tick.
 
 Aggregation rules (from Requirement.md §03):
-  open   = first sub-candle's open  — never changes once set
-  close  = last sub-candle's close  — updates on every 1m tick
-  high   = max across all sub-candles in window
-  low    = min across all sub-candles in window
-  volume = cumulative sum of all sub-candle volumes
+  open   = first tick's open  — never changes once set
+  close  = last tick's close    — updates on every tick
+  high   = max across all ticks in window
+  low    = min across all ticks in window
+  volume = cumulative sum of tick volumes
 """
 
 from src.domain.entities.candle import Candle
-from src.domain.entities.symbol import HIGHER_INTERVALS, INTERVAL_MS, Interval, topic_key
+from src.domain.entities.symbol import ALL_INTERVALS, Interval, topic_key
+from src.domain.services.time_utils import floor_to_interval
 
 
 class AggregationEngine:
     """
-    Maintains open (in-progress) candles for every higher interval.
+    Maintains open (in-progress) candles for every interval.
 
     Structure:
         _open_candles[symbol][interval] = Candle (current in-progress window)
     """
 
     def __init__(self) -> None:
-        # symbol -> interval -> in-progress Candle
         self._open_candles: dict[str, dict[Interval, Candle]] = {}
 
-    def process_1m_candle(self, symbol: str, candle_1m: Candle) -> list[tuple[str, Candle]]:
+    def process_tick(self, symbol: str, tick: Candle, now_ms: int) -> list[tuple[str, Candle]]:
         """
-        Process a new 1m candle and return updated higher-interval candles.
+        Process a price tick and return updated candles for every interval.
 
-        Returns:
-            List of (topic_key, updated_candle) for every interval that was updated.
+        All returned candles use the window-start timestamp so the chart
+        updates the current bar in place until the interval completes.
         """
         updates: list[tuple[str, Candle]] = []
 
         if symbol not in self._open_candles:
             self._open_candles[symbol] = {}
 
-        for interval in HIGHER_INTERVALS:
-            interval_ms = INTERVAL_MS[interval]
-            window_start = (candle_1m.timestamp // interval_ms) * interval_ms
-
+        for interval in ALL_INTERVALS:
+            window_start = floor_to_interval(now_ms, interval)
             existing = self._open_candles[symbol].get(interval)
 
             if existing is None or existing.timestamp != window_start:
-                # New window — open is always the first sub-candle's open
                 new_candle = Candle(
                     timestamp=window_start,
-                    open=candle_1m.open,
-                    high=candle_1m.high,
-                    low=candle_1m.low,
-                    close=candle_1m.close,
-                    volume=candle_1m.volume,
+                    open=tick.open,
+                    high=tick.high,
+                    low=tick.low,
+                    close=tick.close,
+                    volume=tick.volume,
                 )
                 self._open_candles[symbol][interval] = new_candle
             else:
-                # Existing window — update in place
-                existing.high = max(existing.high, candle_1m.high)
-                existing.low = min(existing.low, candle_1m.low)
-                existing.close = candle_1m.close        # always last
-                existing.volume += candle_1m.volume     # cumulative sum
-                # open is deliberately NOT touched
+                existing.high = max(existing.high, tick.high)
+                existing.low = min(existing.low, tick.low)
+                existing.close = tick.close
+                existing.volume += tick.volume
 
             updated = self._open_candles[symbol][interval]
             updates.append((topic_key(symbol, interval.value), updated))
 
         return updates
+
+    def process_1m_candle(self, symbol: str, candle_1m: Candle) -> list[tuple[str, Candle]]:
+        """Backward-compatible wrapper used when replaying 1m history."""
+        return self.process_tick(symbol, candle_1m, candle_1m.timestamp)
 
     def get_open_candle(self, symbol: str, interval: Interval) -> Candle | None:
         return self._open_candles.get(symbol, {}).get(interval)

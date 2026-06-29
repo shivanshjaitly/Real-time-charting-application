@@ -41,6 +41,15 @@ HIGHER_INTERVALS: list[Interval] = [
     Interval.ONE_DAY,
 ]
 
+# Default history depth per interval (candles)
+HISTORY_COUNTS: dict[Interval, int] = {
+    Interval.ONE_MINUTE:       200,
+    Interval.FIVE_MINUTES:     200,
+    Interval.FIFTEEN_MINUTES:  200,
+    Interval.ONE_HOUR:         720,   # ~30 days
+    Interval.ONE_DAY:          365,   # ~1 year
+}
+
 # Base prices for mock data generation
 BASE_PRICES: dict[Symbol, float] = {
     Symbol.BTCUSDT: 67_000.0,

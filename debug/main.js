@@ -388,6 +388,7 @@ class ChartPanel {
           { type: 'indicator', content: ['VOL'] },
         ],
       },
+      timezone: 'UTC',
     })
 
     this._chart.setStyles(KLINE_STYLES)
@@ -423,7 +424,7 @@ class ChartPanel {
         const ticker = symbol.ticker
         self._interval = intervalKey
         self._unsubFn = self._ws.onCandle(ticker, intervalKey, (candle) => {
-          callback(candle, true)
+          callback(candle)
         })
       },
 
@@ -525,7 +526,7 @@ class App {
     this._grid.className = `layout-${layout}`
     this._grid.innerHTML = ''
 
-    const LAYOUT_COUNT = { '1x1': 1, '2x2': 4, '3x3': 9, '4x4': 16 }
+    const LAYOUT_COUNT = { '1x1': 1, '1x2': 2, '2x1': 2, '2x2': 4, '2x3': 6, '3x1': 3, '3x3': 9, '4x4': 16 }
     const count = LAYOUT_COUNT[layout] ?? 1
 
     const defaults = [
@@ -545,6 +546,8 @@ class App {
       { symbol: 'BTCUSDT', interval: '5m'  },
       { symbol: 'MSFT',    interval: '15m' },
       { symbol: 'TSLA',    interval: '1h'  },
+      { symbol: 'GOOGL',   interval: '1d'  },
+      { symbol: 'AMZN',    interval: '1h'  },
     ]
 
     for (let i = 0; i < count; i++) {

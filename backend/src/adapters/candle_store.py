@@ -9,7 +9,7 @@ from collections import deque
 
 from src.domain.entities.candle import Candle
 
-MAX_CANDLES = 200
+MAX_CANDLES = 1000  # enough for 1h (~30d) and 1d (~1y) history
 
 
 class CandleStore:
